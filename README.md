@@ -18,9 +18,11 @@ access, through a narrow adapter and a thin tab. The layout follows
 
 ## Status
 
-Phase 1 of the port is complete: Yitong's reference code is frozen and the
-golden fixtures are generated. The `+hadamard_stim` package itself (Phase 3)
-is not written yet. See `docs/notebook.md`.
+Phases 1 and 2 are complete off-rig. Yitong's reference code is frozen, the
+golden fixtures are generated, and Luminos's ALP MEX has a sequence queue
+that matches his loader call for call. The protocol port itself (Phase 3) has
+not started; `+hadamard_stim` so far holds only `+testing`. See
+`docs/notebook.md`, which also lists the rig checks still due.
 
 ## Layout
 
@@ -30,6 +32,7 @@ setup_project.m            adds the repository root to the path
 run_tests.m                off-rig tests
 config/paths.example.m     machine paths, used only by the fixture generator
 tools/freeze_yitong_reference.sh
+tools/export_yitong_alp_queue_log.m   his queue-loader calls, for Luminos's ALP tests
 tests/
   yitong_reference/        frozen, minimal copy of Yitong's code (test-only)
   fixtures/                golden fixtures generated from that code

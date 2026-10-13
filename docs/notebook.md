@@ -98,9 +98,64 @@ each input rather than the input.
 11. **Cosmetic only.** His app's "dmdTrigsOut" counter reads DAQ row 2,
     which is the Grasshopper trigger, so it displayed Grasshopper frames.
 
+## 2026-10-13: Phase 2, the DMD sequence queue in Luminos
+
+Yitong's trials depend on the ALP sequence queue. A sparse trial uploads 30
+two-picture sequences, a Hadamard trial 8, and the DAQ's DMD triggers then
+play them with no software in the loop. Luminos had no queue, so its ALP MEX
+gained one, on Luminos branch `vdtang3/hadamard-stim`:
+
+- **Commands:** `Supports_Sequence_Queue`, `Load_Sequence_Queue`, `Reset_Sequence_Queue`, `Get_Queue_State`.
+- **Wrappers:** methods of the same names on `ALP_DMD`.
+
+**Call-for-call parity, with three stated differences.** `Load_Sequence_Queue`
+makes the calls his `load_sequence_multi` made, in the same order, with the
+same values. That covers slave mode, queue mode, packed top-down binary data,
+`ALP_SEQ_REPEAT`, uninterrupted binary mode, 44 µs and `ProjStart` per
+sequence. It also covers his quirk of feeding each sequence the timing read
+back from the one before. His wrapper ignored return codes, but on the board
+his data came from every call succeeded. So any refusal now aborts the whole
+load and names the failing call; a refused `SeqTiming`, for example, would
+otherwise leave the 30 Hz default.
+
+The three differences pin down state his loader inherited from a board
+nothing else had touched:
+
+1. The trigger edge (`ALP_VD_EDGE`) is set explicitly. Luminos's stack path sets rising, while his code never set it, so his edge was the board's power-on default. That default is not known yet, so callers must name the edge.
+2. Frame stepping is switched off. That is the power-on state, and Luminos master-mode stacks arm it.
+3. Freeing a queue returns the controller to legacy mode. His single-sequence loaders did the same before starting. Between two trials this adds one `ProjControl` before queue mode is set again.
+
+**How parity is tested off-rig.**
+- `tools/export_yitong_alp_queue_log.m` writes his calls for one sparse and one Hadamard trial, taken from `yitong_trace`, as text into Luminos `tests/fixtures/alp_queue/`.
+- Luminos `tests/alp_host` compiles the real `ALP_DMD.cpp` against a recording fake driver. It requires the log to match his, apart from the differences above. Mutating a structural line of his log makes it fail.
+- `TestAlpSequenceQueue` covers the MATLAB side: ownership, bit packing (identical to his `alp_logical_to_btd`), `invert_output`, fingerprints and failure bookkeeping.
+
+**What the queue showed in each frame.** `hadamard_stim.testing.alp_queue_display`
+models slave-mode queue playback. `TestAlpQueueModel` runs his waveform
+triggers through his queues and confirms finding 7 frame by frame:
+
+- Each stimulation period is played by its own sequence.
+- The queue never runs dry.
+- The final extra trigger lands in the doubled last sequence and brings the orange picture up for the remaining 3199 frames.
+
+What the hardware does after a queue runs dry is not modelled, because his
+protocol never gets there.
+
+**Which driver ran his DMD is still open.**
+- The lab-server ALPTool's `alp4395.dll` (1.0.19.8) is byte-identical to Luminos's first-choice driver.
+- But that ALPTool has no queue constants, and his wrapper used `api.PROJ_QUEUE_MODE`. His rig therefore ran a locally updated ALPTool, whose DLL we have not seen.
+- His 1024×768 masks are packed as 1024-mirror lines, which only fits an XGA board.
+
+**Rig checks before any biology (Phase 2 gate).** The MEX must first be
+rebuilt on the rig PC.
+1. With Luminos closed, run `ALP_DMD.Probe_Drivers()`: which driver and version recognises the board, and is it 1024×768?
+2. Right after Luminos starts, before any stack is loaded, read `Get_State().trigger_edge` (2008 falling, 2009 rising). This is the edge his loader inherited, and it becomes the protocol's configured edge.
+3. Check that `Supports_Sequence_Queue()` returns true.
+4. On a slide, load a small queue of distinct patterns, step it with DAQ triggers, and compare the camera and `Get_Queue_State` with `alp_queue_display`. Include running dry.
+
 ## Parity issues (behaviour that may be a bug; reproduced, not fixed)
 
-- **P1. Reference-image orientation changed after the experiments.** `hadamard_ref.m` gained a transpose on 2026-02-10, after his 2025 data, alongside a Kinetix MEX change. In the newest snapshot, segmentation would run on the transposed image while drift correction compares untransposed scans with the untransposed `hadamard_ref`. The fixtures follow his 2025-03-08 session, which is the untransposed behaviour he actually ran. In Luminos the reference image, scans and DMD calibration must all share Luminos's camera orientation. **Needs confirmation.**
+- **P1. Reference-image orientation changed after the experiments.** `hadamard_ref.m` gained a transpose on 2026-02-10, after his 2025 data, alongside a Kinetix MEX change. In the newest snapshot, segmentation would run on the transposed image while drift correction compares untransposed scans with the untransposed `hadamard_ref`. The fixtures follow his 2025-03-08 session, which is the untransposed behaviour he actually ran. In Luminos the reference image, scans and DMD calibration must all share Luminos's camera orientation. **Confirmed 2026-10-13: the port follows the untransposed 2025 behaviour.** The transposed `hadamard_ref.m` stays frozen only as evidence.
 - **P2. `linearize_blue_voltage` threshold.** It drops calibration points with intensity ≤ 15 in his raw camera units. Mapping that threshold onto the Luminos blue calibration must be decided and recorded.
 - **P3. Masks redrawn after drift correction skip the `saved_mask` AND** that the initial Auto Square masks receive. Reproduced.
 - **P4. Segmentation fails on tied maxima.** It errors if two region maxima tie in value (likely on integer images), and also with fewer than 1000 watershed regions. Reproduced, with the error recorded.
@@ -108,6 +163,6 @@ each input rather than the input.
 
 ## Open questions
 
-- Which ALP DLL opens Firefly's DMD, and does it accept `ALP_PROJ_QUEUE_MODE`? This is the first rig check in Phase 2.
+- Which ALP DLL opens Firefly's DMD, whether it accepts `ALP_PROJ_QUEUE_MODE`, and the board's power-on trigger edge. See the Phase 2 rig checks.
 - His starting orange voltage for stimulation trials was not saved. The fixtures use a 1.0 V placeholder; it only scales the orange row.
 - Whether `saved_mask` was set during his 2025 sessions is unknown. The drift fixture covers both cases.

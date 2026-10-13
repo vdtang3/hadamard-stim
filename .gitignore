@@ -1,0 +1,4 @@
+config/paths.local.m
+.DS_Store
+*.asv
+*~

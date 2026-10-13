@@ -1,0 +1,128 @@
+classdef SimulatedRig < handle
+    %SIMULATEDRIG Firefly's hardware, simulated, for running the protocol off-rig.
+    %
+    %   rig = hadamard_stim.testing.SimulatedRig(world, z_start)
+    %
+    %   Implements the hardware interface the protocol uses (see
+    %   hadamard_stim.protocol.run_protocol), the same one the Luminos adapter
+    %   implements on the rig:
+    %
+    %     z = hw.motor_position()
+    %     hw.motor_move_to(z)
+    %     hw.dmd_load_stack(masks)            scan patterns, canvas [W x L x n]
+    %     hw.dmd_load_queue(sequences, repeats)
+    %                                         sequences{k} canvas [W x L x n_k]
+    %     acq = hw.acquire(spec)              one synchronized acquisition
+    %     im = hw.movie_mean(acq, frames)     mean of those frames of its movie
+    %
+    %   Every acquisition is recorded in ACQUISITIONS with what was configured
+    %   at that moment, in the fields the golden trace records, so a whole run
+    %   can be compared with Yitong's. The DMD is recorded as he loaded it:
+    %   queue bytes are packed with his alp_logical_to_btd and hashed in the
+    %   layout his load_sequence_multi handed to AlpSeqPut.
+    %
+    %   What the camera sees comes from WORLD, a struct of function handles:
+    %     world.scan_image(rig, acq)          reconstructed scan image
+    %     world.movie_mean(rig, acq, frames)  stimulation movie mean
+    %   The parity tests give it the synthetic sample the goldens used.
+
+    properties
+        world
+        position = 0
+        moves = zeros(0, 2)          % [from, to]
+        acquisitions = struct([])
+        stack = struct("sha256", "", "size", [0 0 0])
+        queue = []
+        n_drift_scans = 0
+        n_stim = 0
+        % Called with (operation_name) before each operation; tests use it
+        % to inject failures.
+        before_operation = []
+    end
+
+    methods
+        function obj = SimulatedRig(world, z_start)
+            obj.world = world;
+            obj.position = z_start;
+        end
+
+        function z = motor_position(obj)
+            z = obj.position;
+        end
+
+        function motor_move_to(obj, z)
+            obj.check("motor_move_to");
+            obj.moves(end+1, :) = [obj.position, z];
+            obj.position = z;
+        end
+
+        function dmd_load_stack(obj, masks)
+            obj.check("dmd_load_stack");
+            his = permute(masks, [2 1 3]);
+            obj.stack = struct("sha256", hadamard_stim.metadata.sha256(his), "size", size(his));
+            obj.queue = [];
+        end
+
+        function dmd_load_queue(obj, sequences, repeats)
+            obj.check("dmd_load_queue");
+            n = numel(sequences);
+            q.n_sequences = n;
+            q.picnum = cellfun(@(m) size(m, 3), sequences(:)');
+            q.repeat = repeats(:)';
+            q.sha256 = strings(1, n);
+            bytes = cell(1, n);
+            for k = 1:n
+                data = permute(hadamard_stim.yitong.alp_logical_to_btd(sequences{k}), [3 1 2]);
+                q.sha256(k) = hadamard_stim.metadata.sha256(data);
+                bytes{k} = reshape(data, [], 1);
+            end
+            q.combined_sha256 = hadamard_stim.metadata.sha256(vertcat(uint8([]), bytes{:}));
+            obj.queue = q;
+            obj.stack = struct("sha256", "", "size", [0 0 0]);
+        end
+
+        function acq = acquire(obj, spec)
+            obj.check("acquire");
+            acq = spec;
+            acq.index = numel(obj.acquisitions) + 1;
+            acq.motor_z = obj.position;
+            acq.dmd_stack = obj.stack;
+            acq.queue = obj.queue;
+            switch spec.kind
+                case "drift_scan"
+                    obj.n_drift_scans = obj.n_drift_scans + 1;
+                    acq.drift_scan_number = obj.n_drift_scans;
+                    acq.stim_index = NaN;
+                case "z_stack_plane"
+                    acq.drift_scan_number = NaN;
+                    acq.stim_index = NaN;
+                case "stimulation"
+                    acq.drift_scan_number = NaN;
+                    acq.stim_index = obj.n_stim;
+                    obj.n_stim = obj.n_stim + 1;
+            end
+            if spec.kind ~= "stimulation"
+                acq.image = obj.world.scan_image(obj, acq);
+            end
+            stored = rmfield(acq, intersect(fieldnames(acq), ["waveform" "image"]));
+            if isempty(obj.acquisitions)
+                obj.acquisitions = stored;
+            else
+                obj.acquisitions(end+1, 1) = stored;
+            end
+        end
+
+        function im = movie_mean(obj, acq, frames)
+            obj.check("movie_mean");
+            im = obj.world.movie_mean(obj, acq, frames);
+        end
+    end
+
+    methods (Access = private)
+        function check(obj, operation)
+            if ~isempty(obj.before_operation)
+                obj.before_operation(operation);
+            end
+        end
+    end
+end

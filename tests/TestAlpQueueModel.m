@@ -27,7 +27,7 @@ classdef TestAlpQueueModel < matlab.unittest.TestCase
 
     methods (Test)
         function triggersStepThroughEachSequenceInTurn(testCase)
-            shown = hadamard_stim.testing.alp_queue_display([2 3], [2 1], 8);
+            shown = hadamard_stim.protocol.alp_queue_display([2 3], [2 1], 8);
             testCase.verifyEqual(shown.sequence, [1 1 1 1 2 2 2 0]);
             testCase.verifyEqual(shown.picture, [1 2 1 2 1 2 3 0]);
             testCase.verifyEqual(shown.capacity, 7);
@@ -78,6 +78,36 @@ classdef TestAlpQueueModel < matlab.unittest.TestCase
         end
     end
 
+    methods (Test)
+        function theRuntimeCheckAcceptsHisTrials(testCase)
+            w = testCase.Waveforms;
+            for name = ["stim_sparse" "stim_hadamard"]
+                d = w.(name);
+                waveform = decode(d);
+                n = d.settings.trial.params(4);
+                repeats = [d.settings.trial.params(2) * ones(1, n - 1) 2 * d.settings.trial.params(2)];
+                report = hadamard_stim.protocol.queue_trigger_invariants(waveform, ...
+                    2 * ones(1, n), repeats, d.settings.trial.params);
+                testCase.verifyTrue(report.ok, name + ": " + strjoin(report.problems));
+            end
+        end
+
+        function theRuntimeCheckRefusesAMisalignedQueue(testCase)
+            d = testCase.Waveforms.stim_sparse;
+            waveform = decode(d);
+            % Without his doubled last sequence the final trigger drains the queue.
+            report = hadamard_stim.protocol.queue_trigger_invariants(waveform, ...
+                2 * ones(1, 30), 16 * ones(1, 30), d.settings.trial.params);
+            testCase.verifyFalse(report.ok);
+            testCase.verifySubstring(report.problems(1), "queue holds 960");
+            % One repeat too many in the first sequence shifts every period.
+            report = hadamard_stim.protocol.queue_trigger_invariants(waveform, ...
+                2 * ones(1, 30), [17 16 * ones(1, 28) 32], d.settings.trial.params);
+            testCase.verifyFalse(report.ok);
+            testCase.verifySubstring(report.problems(1), "would show sequence 1");
+        end
+    end
+
     methods
         function [frames, shown, queue] = play(testCase, waveform, n_sequences)
             % Camera frame of every DMD trigger, and what each trigger shows,
@@ -91,7 +121,7 @@ classdef TestAlpQueueModel < matlab.unittest.TestCase
             a = testCase.Trace.acquisitions;
             stim = a([a.kind] == "stimulation");
             queue = stim(find(arrayfun(@(s) s.queue.n_sequences == n_sequences, stim), 1)).queue;
-            shown = hadamard_stim.testing.alp_queue_display( ...
+            shown = hadamard_stim.protocol.alp_queue_display( ...
                 queue.picnum, queue.repeat, numel(dmd));
         end
 
@@ -109,5 +139,14 @@ starts = starts(1:end-1);
 t = starts(find(values(2:end) > 0 & values(1:end-1) <= 0) + 1);
 if values(1) > 0
     t = [starts(1); t];
+end
+end
+
+function waveform = decode(d)
+% The fixture's run-length rows back into samples.
+waveform.channels = d.rows;
+waveform.amplitude = zeros(numel(d.rows), d.n_samples);
+for r = 1:numel(d.rows)
+    waveform.amplitude(r, :) = repelem(d.values{r}, d.run_lengths{r});
 end
 end

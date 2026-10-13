@@ -18,16 +18,26 @@ access, through a narrow adapter and a thin tab. The layout follows
 
 ## Status
 
-Phases 1 and 2 are complete off-rig. Yitong's reference code is frozen, the
-golden fixtures are generated, and Luminos's ALP MEX has a sequence queue
-that matches his loader call for call. The protocol port itself (Phase 3) has
-not started; `+hadamard_stim` so far holds only `+testing`. See
-`docs/notebook.md`, which also lists the rig checks still due.
+Phases 1 to 3 are complete off-rig.
+- Yitong's reference code is frozen, and golden fixtures are generated from it.
+- Luminos's ALP MEX has a sequence queue that matches his loader call for call.
+- The whole protocol runs on a simulated rig and reproduces his 640-trial trace exactly.
+
+Next is the Luminos adapter (Phase 4). The Firefly hardware checks listed in
+`docs/notebook.md` must pass before any real acquisition.
 
 ## Layout
 
 ```text
-+hadamard_stim/            the package (Phase 3 onward)
++hadamard_stim/            the package
+  default_config.m         the experiment, as he ran it
+  validate_config.m        errors, and deviations from his settings
+  HadamardStimController.m one session: setup, then a run
+  apply_controller_action.m  the only write path for a frontend
+  +yitong/                 ports of his functions (source path + SHA-256 in each)
+  +protocol/               his script, step by step, on a hardware interface
+  +metadata/               run recipe, trial records, checkpoints
+  +testing/                simulated rig, his affine geometry
 setup_project.m            adds the repository root to the path
 run_tests.m                off-rig tests
 config/paths.example.m     machine paths, used only by the fixture generator
@@ -45,7 +55,8 @@ docs/notebook.md           engineering notebook: decisions, findings, parity iss
 
 ```matlab
 setup_project
-run_tests
+run_tests            % everything, including the 640-trial parity run (~10 min)
+run_tests("fast")    % everything else
 ```
 
 To regenerate the fixtures (needs `config/paths.local.m`, and read-only

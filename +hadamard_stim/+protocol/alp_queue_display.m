@@ -1,7 +1,7 @@
 function shown = alp_queue_display(pictures, repeats, n_triggers)
 %ALP_QUEUE_DISPLAY Which queued picture each DMD trigger brings up.
 %
-%   shown = hadamard_stim.testing.alp_queue_display(pictures, repeats, n_triggers)
+%   shown = hadamard_stim.protocol.alp_queue_display(pictures, repeats, n_triggers)
 %
 %   Model of an ALP in slave mode with ALP_PROJ_SEQUENCE_QUEUE and
 %   ALP_BIN_UNINTERRUPTED, as loaded by Yitong's load_sequence_multi and by

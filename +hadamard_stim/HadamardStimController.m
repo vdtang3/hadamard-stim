@@ -86,6 +86,7 @@ classdef HadamardStimController < handle
 
         function acquireZReference(obj)
             obj.assertState(["CELLS_APPROVED" "READY"]);
+            session = obj.beginHardware(); %#ok<NASGU>
             reference = hadamard_stim.protocol.run_z_reference(obj.Config, obj.Env);
             reference.had_ref = obj.ReferenceImage;
             obj.Reference = reference;
@@ -104,6 +105,8 @@ classdef HadamardStimController < handle
             end
             obj.assertHardwareValidated();
             state = hadamard_stim.protocol.new_run_state(obj.Config, obj.Cells, obj.Reference);
+            % Checked before the run folder exists, so a refused run leaves nothing.
+            session = obj.beginHardware(); %#ok<NASGU>
             [recipe, arrays] = hadamard_stim.metadata.build_recipe(obj.Config, state, obj.Env.context);
             hadamard_stim.metadata.write_recipe(run_folder, recipe, arrays);
             obj.RunFolder = run_folder;
@@ -118,6 +121,7 @@ classdef HadamardStimController < handle
             [recipe, ~] = hadamard_stim.metadata.read_recipe(run_folder);
             state = hadamard_stim.metadata.load_checkpoint(run_folder);
             obj.Config = recipe.config;
+            session = obj.beginHardware(); %#ok<NASGU>
             obj.Cells = state.cells.canonical;
             obj.Reference = state.reference;
             obj.RunFolder = run_folder;
@@ -235,6 +239,19 @@ classdef HadamardStimController < handle
                     ['Firefly has not passed the checks a real acquisition needs: %s. ' ...
                      'Run them (docs/notebook.md, Phase 2 rig checks) and record the results.'], ...
                     strjoin(gate.missing, ", "));
+            end
+        end
+
+        function session = beginHardware(obj)
+            % One session of hardware use: refuse if the rig cannot run this
+            % configuration, otherwise return a guard that releases the rig
+            % (hw.release, idempotent) however the caller exits.
+            report = obj.Env.hw.begin(obj.Config);
+            session = onCleanup(@() obj.Env.hw.release());
+            if ~report.ok
+                error("hadamard_stim:HardwareNotReady", ...
+                    "The rig cannot run this configuration:\n  %s", ...
+                    strjoin(report.failures, newline + "  "));
             end
         end
 

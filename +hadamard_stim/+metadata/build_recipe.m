@@ -14,6 +14,7 @@ function [recipe, arrays] = build_recipe(cfg, state, context)
 %                          (the Luminos adapter supplies them)
 %     .simulated           true off the rig
 %     .hardware_validation the Firefly checks (hardware_gate), recorded
+%     .hardware            optional: rig facts (hadamard_stim.luminos.hardware_facts)
 %
 %   recipe is JSON-safe; every later record carries recipe.recipe_hash, the
 %   SHA-256 of its canonical JSON. arrays holds what is too big for JSON
@@ -68,6 +69,10 @@ recipe.simulated = isfield(context, "simulated") && context.simulated;
 recipe.calibrations.geometry = context.geometry_identity;
 recipe.calibrations.blue = context.blue_calibration.identity;
 recipe.calibrations.blue_source = context.blue_calibration.source;
+if isfield(context, "hardware")
+    % What the rig reported about itself (hadamard_stim.luminos.hardware_facts).
+    recipe.hardware = context.hardware;
+end
 
 recipe.recipe_hash = recipe_hash(recipe);
 

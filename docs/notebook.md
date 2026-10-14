@@ -245,10 +245,102 @@ memory-capped systemd scope:
 
 Every class except the protocol run peaks at 1 to 4 GB.
 
+## 2026-10-14: Phase 4, the Luminos adapter, off-rig
+
+`+hadamard_stim/+luminos` connects the Phase 3 protocol to Luminos
+(`luminos-private` `f5b464d93`) without changing it. No protocol, `+yitong`
+or golden file changed. Luminos itself is not changed in this phase: the
+device, endpoints, accessor and user config move to Phase 5 with the tab,
+because nothing here needs them.
+
+**The contract.** `LuminosRig` implements the same interface as
+`SimulatedRig`. The interface gained two lifecycle methods, called by the
+controller and never by `+protocol`:
+- `begin(cfg)` runs a read-only preflight;
+- `release()` is the single idempotent cleanup.
+
+`TestLuminosAdapterActions` runs the z-reference and trials 1–4 through both
+backends in the parity world. Each acquisition must have asked for the same
+things:
+- the same samples on Yitong's ports;
+- the same DMD queue bytes and repeats, picture time and edge;
+- the same scan stacks, stage moves and camera frame counts.
+
+`TestLuminosBoundary` checks the dependencies:
+- `+protocol`, `+yitong` and `+metadata` never call the adapter or name a Firefly device or port;
+- `+luminos` uses the port only to probe the blue calibration and to reconstruct scans.
+
+**How each action reaches Luminos.**
+- **Stage:** `Get_Current_Position` / `Move_To_Position`, in mm, which were also his motor units. Every move is recorded as `[from to reached]`.
+- **DMD:**
+  - claimed with `Claim_Pattern_Ownership("hadamard_stim")` on first use;
+  - queues load through `Load_Sequence_Queue` with the configured edge and 44 µs;
+  - scan stacks load through `pattern_stack` + `Write_Stack('slave')`;
+  - `Record_Owned_Pattern` after each load, so Luminos's own acquisition script neither overwrites nor misses a change.
+- **DAQ:** each driven waveform row becomes a `wfm_data` record whose wavefile, `sampled_waveform`, plays the protocol's samples as they are and refuses a length mismatch. `total_time` is set to samples / rate.
+- **Cameras:** one frame per rising edge of the protocol's trigger row.
+  - The Kinetix is `External`, at the protocol's exposure.
+  - The Grasshopper is `External` when his Grasshopper line pulses, else `Off`.
+  - Every other camera is `Off` with one frame.
+- **Acquisition:** `Waveform_Camera_Sync_Acquisition` with the protocol's folder as the tag. The adapter polls `exp_complete`/`round_complete` with a timeout and treats `last_run_aborted` as an error. It then appends `hadamard_stim_acquisition` (no samples) to `output_data.mat`.
+- **Bleaching:** reads only frames 501–1000 of the 8000 (`read_frames`), never the 2.3 GB movie.
+- **Queue identity:** `metadata.queue_fingerprint` hashes each queue in his `AlpSeqPut` byte layout, in both backends, so real trial records compare directly with the trace golden.
+
+**Decisions.**
+- **His port map is Firefly's wiring** (`dragonflySettings.m`). The adapter drives his ports, not Luminos device names.
+- **Rows that are zero throughout are not driven.** His `ao1` (piezo) is now Heater Set Out, `line23` is shutter405, and `line27`/`line14` are Whisker Stim. Driving his zeros there would override those devices, for example turning the heater off. This is a standing deviation.
+- **The blue calibration is the modulator's own.** Luminos's only modulator calibration is `iscalibrated` + `calibration_curve` ([V; power], from `Calibrate_DAQ_Modulator`) on "Blue LED 488". **None exists today:** nothing sets `iscalibrated`, nothing persists a curve, and Firefly has no power meter. Real runs therefore refuse with instructions, as Clarification 1 intended. There is no Hadamard calibration store.
+- **P2 is translated exactly, never guessed.** `blue_threshold` is a required setting in the calibration's power units, with no default. The adapter passes `power·15/blue_threshold` to the unmodified `linearize_blue_voltage`. Because his function normalizes by the maximum, this is exactly "drop points with power ≤ blue_threshold". On his own curve at 15, the result is bit for bit the parity result (tested). The threshold is recorded in the blue calibration identity and as a standing deviation.
+- **Geometry is the Luminos per-camera DMD calibration.** Spots are filled in camera space and warped by `setPatterningROI(…, write_when_complete=false)`. The adapter refuses unless the Kinetix has a pair calibration, it is the transform in use, and its reference image has the acquisition size and binning. Without his `saved_mask`, P3 does not arise on the rig.
+- **Scan reconstruction** uses the `+yitong` cores on the recorded files, one movie at a time. The pinhole calibration comes from operator-named Luminos calibration acquisitions.
+- **The recipe stays the package's.** `hardware_facts` supplies:
+  - rig and user;
+  - DMD model, serial, size, API and queue support;
+  - every camera's id, ROI, binning and compression;
+  - stage class and units;
+  - the DAQ rate, clock and full port map;
+  - the blue modulator;
+  - the Luminos commit (`luminos_session_info`).
+
+  It also supplies the scan-calibration hash. `build_recipe` stores all of it under `hardware`.
+
+**Preflight** (`preflight.m`, read only, every failure listed with what to do):
+- **Rig:** it is Firefly; Luminos is not acquiring.
+- **Devices:** each one is present exactly once; the stage only when z or drift is on.
+- **DMD:** queue support; no other owner; a 768×1024 canvas; not inverted.
+- **DAQ:** 100 kHz on its own clock, with no external clock override and no foreign ao/do records.
+- **Kinetix:** uncompressed, unbinned.
+- **Calibrations:** a usable blue calibration and threshold; a valid Kinetix DMD calibration.
+
+The controller's existing hardware gate still requires the four recorded Firefly checks.
+
+**Cleanup** (`LuminosRig.release`): every change is journaled just before it is made, and only journaled changes are undone. The order is:
+1. abort the acquisition;
+2. restore the cameras;
+3. restore DAQ `global_props`/`wfm_data`;
+4. reset the queue, blank the DMD, restore `pattern_stack`;
+5. **release ownership last.**
+
+Each step is guarded, so one failure does not stop the rest, and the call is idempotent. The stage is not moved back (he never did). `TestLuminosCleanup` injects a failure at each step (claim, stack write, queue load, DAQ install, a camera part way, the acquisition, a Luminos abort, a hang, a stage move, a failing restore step).
+
+**Memory.**
+- `/tmp` on the workstation is tmpfs, so files written there are RAM. The fake acquisition writes sparse movie files, and every test removes its folder.
+- His pinhole calibration upsamples to ~4096 px along the longest side. At the Kinetix ROI (328 × 448) it briefly needs about 10 GB (his code required 16× the pinhole array free), so the rig PC needs that headroom.
+- With a small square test image the upsampling is ~170×, so tests use wide images, as `TestParityReconstruction` does.
+
+**Still needs Firefly** (in addition to the Phase 2 checks):
+- whether the current blue calibration can be created, resolved and applied;
+- IR still on `ao3`, and no conflicts on the driven ports;
+- Kinetix/Grasshopper/Blackfly lifecycle and restore, including `Off` mode on the GenTL cameras;
+- the orientation of Luminos frames against his `Sq_camera.bin` (P1);
+- the scan stack's hard-coded rising edge against his loader;
+- Newport backlash correction against his motor;
+- the pinhole calibration's memory on the rig PC.
+
 ## Parity issues (behaviour that may be a bug; reproduced, not fixed)
 
 - **P1. Reference-image orientation changed after the experiments.** `hadamard_ref.m` gained a transpose on 2026-02-10, after his 2025 data, alongside a Kinetix MEX change. In the newest snapshot, segmentation would run on the transposed image while drift correction compares untransposed scans with the untransposed `hadamard_ref`. The fixtures follow his 2025-03-08 session, which is the untransposed behaviour he actually ran. In Luminos the reference image, scans and DMD calibration must all share Luminos's camera orientation. **Confirmed 2026-10-13: the port follows the untransposed 2025 behaviour.** The transposed `hadamard_ref.m` stays frozen only as evidence.
-- **P2. `linearize_blue_voltage` threshold.** It drops calibration points with intensity ≤ 15 in his raw camera units. Mapping that threshold onto the Luminos blue calibration must be decided and recorded.
+- **P2. `linearize_blue_voltage` threshold.** It drops calibration points with intensity ≤ 15 in his raw camera units. That number has no meaning for a Luminos calibration. Since Phase 4 the operator must set `blue_threshold` in the calibration's own units. It is applied exactly (power·15/blue_threshold into the unmodified port) and recorded as a deviation; no translation is invented.
 - **P3. Masks redrawn after drift correction skip the `saved_mask` AND** that the initial Auto Square masks receive. Reproduced.
 - **P4. Segmentation fails on tied maxima.** It errors if two region maxima tie in value (likely on integer images), and also with fewer than 1000 watershed regions. Reproduced, with the error recorded.
 - **P5. Bleaching state.** `b0` is measured only at trial 1. The orange voltage is rescaled only at retarget trials, from the last trial's `b1`.

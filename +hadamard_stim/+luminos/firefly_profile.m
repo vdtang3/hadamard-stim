@@ -1,0 +1,61 @@
+function profile = firefly_profile()
+%FIREFLY_PROFILE What the adapter needs to know about Firefly, and nothing else.
+%
+%   profile = hadamard_stim.luminos.firefly_profile()
+%
+%   Every Firefly-specific fact the adapter relies on is here, so none of
+%   them leaks into +protocol or +yitong. Device names are the ones in
+%   Luminos src/Applications/Firefly/Firefly.json (f5b464d93).
+%
+%   The channels are Yitong's dragonflySettings.m map (tests/yitong_reference/
+%   dragonfly/Settings), in the order of cfg.daq.channels, which is also
+%   the order of the waveform rows. Firefly is still wired the same way;
+%   some of his ports now carry other Luminos devices (now_used_by). Rows
+%   that are zero throughout an acquisition are not driven at all (see
+%   daq_records), which is what keeps the adapter off those ports.
+profile.rig_name = "Firefly";
+profile.owner = "hadamard_stim";
+
+profile.devices.daq = struct("type", "DAQ", "name", "DAQ_Session");
+profile.devices.dmd = struct("type", "ALP_DMD", "name", "DMD (shared)");
+profile.devices.camera = struct("type", "Camera", "name", "Teledyne Kinetix");
+profile.devices.behavior_camera = struct("type", "Camera", "name", "Grasshopper3");
+profile.devices.stage = struct("type", "Newport_Motor_Controller", "name", "NewportTRB25CC");
+profile.devices.blue_modulator = struct("type", "NI_DAQ_Modulator", "name", "Blue LED 488");
+
+% Which waveform rows trigger which camera.
+profile.camera_trigger_row = "cameraTrigger";
+profile.behavior_trigger_row = "grashopperTrigger";
+
+profile.daq_rate = 1e5;            % his DAQ ran on its own clock at 100 kHz
+
+channel = @(name, port, kind, now_used_by) struct("name", name, "port", port, ...
+    "kind", kind, "now_used_by", now_used_by);
+profile.channels = [
+    channel("cameraTrigger",     "Dev1/port0/line26", "do", "Teledyne Kinetix trigger")
+    channel("grashopperTrigger", "Dev1/port0/line0",  "do", "Grasshopper3 trigger")
+    channel("dmdTrigger",        "Dev1/port0/line8",  "do", "DMD (shared) trigger")
+    channel("blueIntensity",     "Dev1/ao2",          "ao", "Blue LED 488")
+    channel("orangeIntensity",   "Dev1/ao0",          "ao", "Red LED 615")
+    channel("redShutter",        "Dev1/port0/line22", "do", "")
+    channel("limeShutter",       "Dev1/port0/line23", "do", "shutter405")
+    channel("blueShutter",       "Dev1/port0/line28", "do", "")
+    channel("piezoTrigger",      "Dev1/ao1",          "ao", "Heater Set Out")
+    channel("IRVoltage",         "Dev1/ao3",          "ao", "")
+    channel("magnetPTrigger",    "Dev1/port0/line27", "do", "Whisker Stim Trigger +")
+    channel("magnetNTrigger",    "Dev1/port0/line14", "do", "Whisker Stim Trigger -")
+    ];
+
+% Always different from his rig when this adapter runs; recorded in every
+% recipe (build_recipe, context.standing_deviations).
+profile.standing_deviations = [
+    "Blue linearisation uses the active Luminos calibration of ""Blue LED 488"", not his blueCal.mat; the intensity threshold is the configured blue_threshold (parity issue P2)."
+    "Masks are projected through the Luminos DMD calibration for the Teledyne Kinetix, not his affine registration and correction transform."
+    "Waveform rows that are zero throughout an acquisition are not driven; his DAQ held them at 0 V. On Firefly some of those ports now belong to other devices (Heater Set Out, shutter405, Whisker Stim)."
+    "Luminos ends every driven port at 0, so IRVoltage drops from 0.5 V to 0 V on the last sample and stays there between acquisitions."
+    "The behaviour camera is recorded by Luminos in the same acquisition, triggered by his grashopperTrigger line, instead of by SpinView."
+    "Scan pattern stacks are stepped on the rising trigger edge (Luminos Write_Stack), whatever edge the stimulation queue uses."
+    "Stage moves go through the Newport controller, including its backlash correction on downward moves."
+    "Luminos records every camera on the rig; cameras the protocol does not use take one free-running frame."
+    ];
+end

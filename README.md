@@ -18,13 +18,18 @@ access, through a narrow adapter and a thin tab. The layout follows
 
 ## Status
 
-Phases 1 to 3 are complete off-rig.
+Phases 1 to 4 are complete off-rig.
 - Yitong's reference code is frozen, and golden fixtures are generated from it.
 - Luminos's ALP MEX has a sequence queue that matches his loader call for call.
 - The whole protocol runs on a simulated rig and reproduces his 640-trial trace exactly.
+- The Luminos adapter (`+luminos`) asks Luminos for the same actions as the
+  simulated rig, checks the rig before touching it and restores it afterwards.
 
-Next is the Luminos adapter (Phase 4). The Firefly hardware checks listed in
-`docs/notebook.md` must pass before any real acquisition.
+Real acquisition still needs:
+- the Firefly hardware checks listed in `docs/notebook.md`;
+- an active Luminos calibration of the blue modulator (none exists yet).
+
+Next is the Luminos tab (Phase 5).
 
 ## Layout
 
@@ -37,7 +42,9 @@ Next is the Luminos adapter (Phase 4). The Firefly hardware checks listed in
   +yitong/                 ports of his functions (source path + SHA-256 in each)
   +protocol/               his script, step by step, on a hardware interface
   +metadata/               run recipe, trial records, checkpoints
-  +testing/                simulated rig, his affine geometry
+  +luminos/                the only code that touches Luminos (LuminosRig,
+                           preflight, calibrations, Firefly facts)
+  +testing/                simulated rig, his affine geometry, fake Luminos
 setup_project.m            adds the repository root to the path
 run_tests.m                off-rig tests
 config/paths.example.m     machine paths, used only by the fixture generator
@@ -55,8 +62,24 @@ docs/notebook.md           engineering notebook: decisions, findings, parity iss
 
 ```matlab
 setup_project
-run_tests            % everything, including the 640-trial parity run (~10 min)
+run_tests            % everything, including the 640-trial parity run (~15 min)
 run_tests("fast")    % everything else
+```
+
+Run long MATLAB jobs under a memory cap, so a runaway is killed instead of
+freezing the workstation (twice so far):
+
+```sh
+systemd-run --user --scope -p MemoryMax=12G -p MemorySwapMax=0 matlab -batch "run_tests"
+```
+
+On the rig, after the Firefly checks, a session is built from the live Luminos
+app:
+
+```matlab
+env = hadamard_stim.luminos.make_environment(app, cfg, blue_threshold=..., ...
+    calibration_folders=..., hardware_validation=...);
+c = hadamard_stim.HadamardStimController(env);
 ```
 
 To regenerate the fixtures (needs `config/paths.local.m`, and read-only

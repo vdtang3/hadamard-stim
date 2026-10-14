@@ -14,6 +14,8 @@ classdef SimulatedRig < handle
     %                                         sequences{k} canvas [W x L x n_k]
     %     acq = hw.acquire(spec)              one synchronized acquisition
     %     im = hw.movie_mean(acq, frames)     mean of those frames of its movie
+    %     report = hw.begin(cfg)              always ready (see readiness)
+    %     hw.release()                        nothing to restore
     %
     %   Every acquisition is recorded in ACQUISITIONS with what was configured
     %   at that moment, in the fields the golden trace records, so a whole run
@@ -38,6 +40,10 @@ classdef SimulatedRig < handle
         % Called with (operation_name) before each operation; tests use it
         % to inject failures.
         before_operation = []
+        % What begin() reports; tests set it to refuse a configuration.
+        readiness = struct("ok", true, "failures", strings(0, 1))
+        sessions = 0                 % begin() calls
+        releases = 0                 % release() calls
     end
 
     methods
@@ -65,19 +71,7 @@ classdef SimulatedRig < handle
 
         function dmd_load_queue(obj, sequences, repeats)
             obj.check("dmd_load_queue");
-            n = numel(sequences);
-            q.n_sequences = n;
-            q.picnum = cellfun(@(m) size(m, 3), sequences(:)');
-            q.repeat = repeats(:)';
-            q.sha256 = strings(1, n);
-            bytes = cell(1, n);
-            for k = 1:n
-                data = permute(hadamard_stim.yitong.alp_logical_to_btd(sequences{k}), [3 1 2]);
-                q.sha256(k) = hadamard_stim.metadata.sha256(data);
-                bytes{k} = reshape(data, [], 1);
-            end
-            q.combined_sha256 = hadamard_stim.metadata.sha256(vertcat(uint8([]), bytes{:}));
-            obj.queue = q;
+            obj.queue = hadamard_stim.metadata.queue_fingerprint(sequences, repeats);
             obj.stack = struct("sha256", "", "size", [0 0 0]);
         end
 
@@ -110,6 +104,17 @@ classdef SimulatedRig < handle
             else
                 obj.acquisitions(end+1, 1) = stored;
             end
+        end
+
+        function report = begin(obj, cfg) %#ok<INUSD>
+            obj.check("begin");
+            obj.sessions = obj.sessions + 1;
+            report = obj.readiness;
+        end
+
+        function release(obj)
+            % Nothing to restore off the rig; counted so tests can see it ran.
+            obj.releases = obj.releases + 1;
         end
 
         function im = movie_mean(obj, acq, frames)

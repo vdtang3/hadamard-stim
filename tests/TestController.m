@@ -45,6 +45,10 @@ classdef TestController < matlab.unittest.TestCase
             testCase.verifyTrue(isfile(fullfile(testCase.Folder, "run_recipe.json")));
             % The state a frontend gets is JSON-safe.
             testCase.verifyNotEmpty(jsonencode(r.state));
+            % Nothing a run keeps holds DAQ samples or images: a full run
+            % keeps 640 records, and samples are ~50 MB per trial.
+            testCase.verifyEmpty(intersect(fieldnames(c.LastRecord.acquisition), ["waveform" "image"]));
+            testCase.verifyEmpty(intersect(fieldnames(c.Reference.acquisitions), ["waveform" "image"]));
         end
 
         function realHardwareNeedsTheFireflyChecks(testCase)

@@ -24,5 +24,6 @@ waveform.function_name = name;
 waveform.settings = settings;
 waveform.channels = waves.channels;
 waveform.amplitude = waves.amplitude;
+waveform.sha256 = hadamard_stim.metadata.sha256(waves.amplitude);
 waveform.n_camera_frames = n_frames;
 end

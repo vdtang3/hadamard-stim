@@ -221,6 +221,30 @@ the fitted vertex lies outside the stack. In all three drift cases, including
 a drift beyond the stack, his fit stayed inside it. The branch is ported
 verbatim.
 
+## 2026-10-14: the full suite exhausted memory
+
+Twice, running all the tests filled the workstation's 60 GB and crashed it.
+The cause was `run_trial`: a quoting slip (`['waveform" "image']`, a single
+char vector) meant the waveform was never removed from the trial record. A
+stimulation waveform is about 50 MB of doubles, and `run_protocol` keeps all
+640 records.
+
+What was changed:
+- **The quoting is fixed.** Records keep the settings and, new, the SHA-256 of the samples, which the plan's metadata list asked for.
+- **The reference z-stack drops its 21 waveforms and plane images** once reconstructed. They lived in the run state and in `run_recipe.mat`.
+- **The waveform cache is bounded to four entries.** Orange changes at every retarget, so earlier settings never recur.
+
+`TestController` now checks that nothing the run keeps holds samples or images.
+Trial records also gained `status` and `started_utc` (Clarification 3's
+"status, timings").
+
+To find the cause safely, each test class ran in its own MATLAB under a
+memory-capped systemd scope:
+
+    systemd-run --user --scope -p MemoryMax=12G -p MemorySwapMax=0 matlab -batch ...
+
+Every class except the protocol run peaks at 1 to 4 GB.
+
 ## Parity issues (behaviour that may be a bug; reproduced, not fixed)
 
 - **P1. Reference-image orientation changed after the experiments.** `hadamard_ref.m` gained a transpose on 2026-02-10, after his 2025 data, alongside a Kinetix MEX change. In the newest snapshot, segmentation would run on the transposed image while drift correction compares untransposed scans with the untransposed `hadamard_ref`. The fixtures follow his 2025-03-08 session, which is the untransposed behaviour he actually ran. In Luminos the reference image, scans and DMD calibration must all share Luminos's camera orientation. **Confirmed 2026-10-13: the port follows the untransposed 2025 behaviour.** The transposed `hadamard_ref.m` stays frozen only as evidence.

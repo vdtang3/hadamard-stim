@@ -68,6 +68,14 @@ classdef TestRunRecords < matlab.unittest.TestCase
             testCase.verifyEqual(string(json.recipe_hash), recipe.recipe_hash);
             testCase.verifyTrue(json.retarget);
             testCase.verifyEqual(json.orange_v, g(stim(40)).orange_v, "RelTol", 1e-15);
+            testCase.verifyEqual(string(json.status), "completed");
+            testCase.verifyNotEmpty(json.started_utc);
+            % The recorded hash is of the samples the trial's settings give.
+            s = records([records.trial] == 40).acquisition.waveform_settings;
+            w = hadamard_stim.protocol.stimulation_waveform(cfg, rmfield(env, "waveform_cache"), ...
+                s.exposure_ms, s.orange_v, s.blue_v, s.params);
+            testCase.verifyEqual(string(json.acquisition.waveform_sha256), ...
+                hadamard_stim.metadata.sha256(w.amplitude));
         end
 
         function theRecipeIsWrittenOnceAndChecked(testCase)

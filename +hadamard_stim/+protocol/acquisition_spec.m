@@ -24,6 +24,7 @@ spec.trial = options.trial;
 spec.waveform_function = waveform.function_name;
 spec.waveform_settings = waveform.settings;
 spec.waveform = waveform;
+spec.waveform_sha256 = waveform.sha256;   % of the samples (amplitude), as doubles
 spec.camera_exposure_ms = options.camera_exposure_ms;
 spec.waveform_period_ms = waveform.settings.exposure_ms;
 spec.n_frames = waveform.n_camera_frames;

@@ -41,8 +41,14 @@ waveform.function_name = "dragonflyMultiPatWaveform_2color_periodicPulse_v2_yq";
 waveform.settings = settings;
 waveform.channels = waves.channels;
 waveform.amplitude = waves.amplitude;
+waveform.sha256 = hadamard_stim.metadata.sha256(waves.amplitude);
 waveform.n_camera_frames = p.n_frames;
 if strlength(key) > 0
+    % Orange changes at every retarget, so old settings never come back;
+    % a bound keeps the cache to a few waveforms (~50 MB each).
+    if env.waveform_cache.Count >= 4
+        remove(env.waveform_cache, keys(env.waveform_cache));
+    end
     env.waveform_cache(key) = waveform;
 end
 end

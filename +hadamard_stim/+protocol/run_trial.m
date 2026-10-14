@@ -4,7 +4,7 @@ function [state, record] = run_trial(cfg, env, state, iTrial)
 %   [state, record] = hadamard_stim.protocol.run_trial(cfg, env, state, iTrial)
 %
 %   Line references are to RunSynchronizedAQMulti_sparse_pulse_hadamard_behavior_v1.m.
-record = struct("trial", iTrial, "kind", "", "folder", "", "skipped", false, ...
+record = struct("trial", iTrial, "started_utc", utc_now(), "kind", "", "folder", "", "skipped", false, ...
     "retarget", false, "correction", [], "orange_v", NaN, "blue_v", NaN, ...
     "params", [], "c_idx_all_it", false(0, 0), "picnum", [], "repeats", [], ...
     "b0", NaN, "b1", NaN, "acquisition", []);
@@ -75,7 +75,9 @@ record.picnum = cellfun(@(m) size(m, 3), plan.pictures(:)');
 record.repeats = plan.repeats;
 record.b0 = empty_to_nan(state.b0);
 record.b1 = empty_to_nan(state.b1);
-record.acquisition = rmfield(acq, intersect(fieldnames(acq), ['waveform" "image']));
+% The samples (~50 MB) are not kept: a run holds 640 records, and the
+% settings that regenerate them are in waveform_settings.
+record.acquisition = rmfield(acq, intersect(fieldnames(acq), ["waveform" "image"]));
 end
 
 function [state, plan] = plan_sparse_trial(cfg, env, state, iTrial)
@@ -141,6 +143,10 @@ end
 function folder = trial_folder(cfg, blue_v, frames, iTrial)
 prefix = sprintf('%s_SPulseHad%i_DC', cfg.naming.prefix, cfg.matrix.order);
 folder = string(sprintf([prefix '_%.0fV_%.1f_%02i'], [blue_v frames iTrial]));
+end
+
+function t = utc_now()
+t = string(datetime("now", "TimeZone", "UTC", "Format", "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"));
 end
 
 function v = empty_to_nan(v)

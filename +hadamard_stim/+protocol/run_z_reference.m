@@ -46,4 +46,8 @@ reference.z_all = zAll;
 reference.z_focus = zOrig;
 reference.acquisitions = [acquisitions{:}];
 reference.had_z_stack = env.reconstruct_z_stack(reference.acquisitions);
+% The reference lives in the run state and the recipe; 21 copies of the
+% scan samples and the plane images are not needed once reconstructed.
+reference.acquisitions = rmfield(reference.acquisitions, ...
+    intersect(fieldnames(reference.acquisitions), ["waveform" "image"]));
 end

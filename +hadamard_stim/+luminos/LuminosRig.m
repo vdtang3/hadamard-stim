@@ -19,6 +19,11 @@ classdef LuminosRig < handle
     %   movie_mean(acq, f)    mean of frames f of the imaging camera's file
     %   release()             undo everything this object changed, DMD
     %                         ownership last; safe to call any number of times
+    %   abort()               only sets a flag, so it is safe from a JS_Server
+    %                         interrupt: the acquisition being waited for is
+    %                         aborted in Luminos, and this and every later
+    %                         operation raise hadamard_stim:Aborted until the
+    %                         next begin
     %
     %   Every change is journaled just before it is made, so release()
     %   restores exactly what was changed, however far setup got.
@@ -33,6 +38,7 @@ classdef LuminosRig < handle
         moves = zeros(0, 3)           % [from, to, reached], every stage move
         acquisitions = struct([])     % what each acquisition did (no samples)
         LastRelease = []              % report of the last release()
+        AbortRequested (1, 1) logical = false
     end
 
     properties (Access = private)
@@ -61,6 +67,7 @@ classdef LuminosRig < handle
         % ---- Session ----------------------------------------------------
 
         function report = begin(obj, cfg)
+            obj.AbortRequested = false;
             report = hadamard_stim.luminos.preflight(obj.App, cfg, ...
                 blue_threshold=obj.Options.blue_threshold, profile=obj.Profile);
             if ~report.ok
@@ -122,6 +129,10 @@ classdef LuminosRig < handle
             end
         end
 
+        function abort(obj)
+            obj.AbortRequested = true;
+        end
+
         % ---- Stage ------------------------------------------------------
 
         function z = motor_position(obj)
@@ -129,6 +140,7 @@ classdef LuminosRig < handle
         end
 
         function motor_move_to(obj, z)
+            obj.refuseIfAborted("the stage move");
             stage = obj.device("stage");
             from = double(stage.Get_Current_Position());
             stage.Move_To_Position(z);
@@ -139,6 +151,7 @@ classdef LuminosRig < handle
         % ---- DMD --------------------------------------------------------
 
         function dmd_load_stack(obj, masks)
+            obj.refuseIfAborted("loading the scan patterns");
             dmd = obj.ownedDmd();
             obj.requireCanvas(dmd, masks);
             obj.saveStack(dmd);
@@ -151,6 +164,7 @@ classdef LuminosRig < handle
         end
 
         function dmd_load_queue(obj, sequences, repeats)
+            obj.refuseIfAborted("loading the stimulation queue");
             dmd = obj.ownedDmd();
             for k = 1:numel(sequences)
                 obj.requireCanvas(dmd, sequences{k});
@@ -167,6 +181,7 @@ classdef LuminosRig < handle
         % ---- Acquisition ------------------------------------------------
 
         function acq = acquire(obj, spec)
+            obj.refuseIfAborted("the acquisition");
             app = obj.App;
             if isequal(app.acquisition_active, true)
                 error("hadamard_stim:AcquisitionActive", ...
@@ -315,6 +330,24 @@ classdef LuminosRig < handle
             end
         end
 
+        function refuseIfAborted(obj, what)
+            if obj.AbortRequested
+                error("hadamard_stim:Aborted", "The run was aborted before %s.", what);
+            end
+        end
+
+        function abortAndWait(obj)
+            % Luminos finishes an aborted acquisition on its own timer.
+            app = obj.App;
+            obj.abortIfActive();
+            started = tic;
+            while ~(isequal(app.exp_complete, true) && isequal(app.round_complete, true)) && ...
+                    toc(started) < obj.Options.timeout_margin_s
+                pause(obj.Options.poll_s);
+            end
+            obj.Journal.acquiring = isequal(app.acquisition_active, true);
+        end
+
         function waitForAcquisition(obj, duration_s)
             % Waveform_Camera_Sync_Acquisition returns once started; Luminos
             % finishes on a timer, which pause lets run.
@@ -322,6 +355,10 @@ classdef LuminosRig < handle
             limit = duration_s + obj.Options.timeout_margin_s;
             started = tic;
             while ~(isequal(app.exp_complete, true) && isequal(app.round_complete, true))
+                if obj.AbortRequested
+                    obj.abortAndWait();
+                    obj.refuseIfAborted("the end of the acquisition");
+                end
                 if toc(started) > limit
                     error("hadamard_stim:AcquisitionTimeout", ...
                         "The acquisition did not finish within %.0f s.", limit);

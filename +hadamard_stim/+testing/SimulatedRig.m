@@ -15,7 +15,8 @@ classdef SimulatedRig < handle
     %     acq = hw.acquire(spec)              one synchronized acquisition
     %     im = hw.movie_mean(acq, frames)     mean of those frames of its movie
     %     report = hw.begin(cfg)              always ready (see readiness)
-    %     hw.release()                        nothing to restore
+    %     report = hw.release()               nothing to restore
+    %     hw.abort()                          later operations refuse until begin
     %
     %   Every acquisition is recorded in ACQUISITIONS with what was configured
     %   at that moment, in the fields the golden trace records, so a whole run
@@ -44,6 +45,7 @@ classdef SimulatedRig < handle
         readiness = struct("ok", true, "failures", strings(0, 1))
         sessions = 0                 % begin() calls
         releases = 0                 % release() calls
+        aborted = false              % abort() called since the last begin()
     end
 
     methods
@@ -87,7 +89,7 @@ classdef SimulatedRig < handle
                     obj.n_drift_scans = obj.n_drift_scans + 1;
                     acq.drift_scan_number = obj.n_drift_scans;
                     acq.stim_index = NaN;
-                case "z_stack_plane"
+                case {"z_stack_plane" "reference_scan"}
                     acq.drift_scan_number = NaN;
                     acq.stim_index = NaN;
                 case "stimulation"
@@ -108,13 +110,19 @@ classdef SimulatedRig < handle
 
         function report = begin(obj, cfg) %#ok<INUSD>
             obj.check("begin");
+            obj.aborted = false;
             obj.sessions = obj.sessions + 1;
             report = obj.readiness;
         end
 
-        function release(obj)
+        function report = release(obj)
             % Nothing to restore off the rig; counted so tests can see it ran.
             obj.releases = obj.releases + 1;
+            report = struct("steps", "simulated", "errors", strings(0, 1), "ok", true);
+        end
+
+        function abort(obj)
+            obj.aborted = true;
         end
 
         function im = movie_mean(obj, acq, frames)
@@ -125,6 +133,9 @@ classdef SimulatedRig < handle
 
     methods (Access = private)
         function check(obj, operation)
+            if obj.aborted && operation ~= "begin"
+                error("hadamard_stim:Aborted", "The run was aborted before %s.", operation);
+            end
             if ~isempty(obj.before_operation)
                 obj.before_operation(operation);
             end

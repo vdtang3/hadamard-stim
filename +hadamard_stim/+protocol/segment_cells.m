@@ -13,6 +13,7 @@ function cells = segment_cells(cfg, ref_image, geometry)
 %   cells.illum_rois, cells.stim_rois   NaN-separated camera-space spots
 %   cells.illum_mask, cells.stim_mask   canvas masks of all cells
 %   cells.min_val     the curve he chose n_exclude from
+%   cells.excluded_coord  [n_exclude x 2] the skipped top-contrast candidates
 s = cfg.segmentation;
 if isempty(s.n_exclude)
     error("hadamard_stim:NExcludeMissing", ...
@@ -20,8 +21,9 @@ if isempty(s.n_exclude)
          'preview and choose how many top-contrast candidates to skip ' ...
          '(Yitong''s FOV needed 5).']);
 end
-[x, y, min_val] = hadamard_stim.yitong.static_image_seg_v5(ref_image, s.threshold, s.n_exclude);
+[x, y, min_val, excluded] = hadamard_stim.yitong.static_image_seg_v5(ref_image, s.threshold, s.n_exclude);
 cells.cell_coord = [x y];
+cells.excluded_coord = excluded;
 cells.min_val = min_val;
 cells.threshold = s.threshold;
 cells.n_exclude = s.n_exclude;

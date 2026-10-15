@@ -26,9 +26,16 @@ function methods_ = hardware_interface()
 %     report = begin(cfg)                  read-only checks that the rig can
 %                                          run cfg, then adopt it; report.ok,
 %                                          report.failures (strings)
-%     release()                            return the rig to how it was
+%     report = release()                   return the rig to how it was
 %                                          found; safe to call at any time,
-%                                          any number of times
+%                                          any number of times; report.ok,
+%                                          report.steps, report.errors
+%     abort()                              stop as soon as possible: abandon
+%                                          the acquisition in progress, and
+%                                          refuse every later operation with
+%                                          hadamard_stim:Aborted until the
+%                                          next begin. Safe to call from a
+%                                          callback while an operation waits.
 methods_ = ["motor_position" "motor_move_to" "dmd_load_stack" "dmd_load_queue" ...
-    "acquire" "movie_mean" "begin" "release"];
+    "acquire" "movie_mean" "begin" "release" "abort"];
 end

@@ -337,6 +337,77 @@ Each step is guarded, so one failure does not stop the rest, and the call is ide
 - Newport backlash correction against his motor;
 - the pinhole calibration's memory on the rig PC.
 
+## 2026-10-14: Phase 5, the Luminos tab
+
+The Luminos **Hadamard Stim** tab is a thin skin over the same controller
+the programmatic path uses (Luminos `vdtang3/hadamard-stim`). There is one
+execution path:
+
+```text
+tab → hadamard_stim_action_js / get_hadamard_stim_state_js / get_hadamard_stim_view_js
+    → hadamard_stim.apply_controller_action / controller_view
+    → HadamardStimController → +protocol → LuminosRig → Luminos
+```
+
+**Luminos side, copied from Adaptive Optopatch's pattern (no dependency on it).**
+- A `Hadamard_Stim` device (`src/Devices/User_Devices/Hadamard_Stim`) lazily builds one shared controller on a `LuminosBackend`. Its initializer carries the rig settings (`blue_threshold`, `calibration_folders`, `hardware_validation_file`, `run_root`). It pushes the controller's `getState()` as `hadamard_stim_progress`, and `Allows_UI_Interrupt` admits only `stop_after_current` and `abort`.
+- `Rig_Control_App.getHadamardStimController` is the accessor.
+- `src/Users/Vincent.json` enables the device and tab on Firefly.
+- The tab (`userTabs/HadamardStim/`) polls once a second while visible, adopts pushes, and fetches images and the other views only when they can have changed.
+
+**Why a backend.** The tab needs the controller before there is an
+environment: to show the preflight and the calibration status, and to take
+the rig settings. `HadamardStimController(backend)` builds its env with
+`make_environment` when the operator presses Prepare. `HadamardStimController(env)`
+is unchanged, and every existing test uses it.
+
+**Controller additions.**
+- **Actions:** `update_config` (only the fields `ui.config_fields` lists, coerced to their `default_config` types; `validate_config` still decides), `set_rig_settings`, `run_preflight` (read only), `prepare_rig`, `acquire_reference_image`, `abort` and `new_session`.
+- **State:**
+  - lifecycle `ABORTED`;
+  - an `Activity` and protocol `Phase`, so the tab can show drift correction, sparse pulse, Hadamard trial or z-reference plane while a run is going;
+  - the cleanup report;
+  - the last error's identifier.
+- **Release before the outcome.** The rig is released before COMPLETED, STOPPED, FAILED or ABORTED is reported. The old `onCleanup` guard stays as a safety net and is a no-op after that.
+- **Size:** `getState` stays about 10 KB. Images, masks, waveforms, queues, records and checkpoints are left out; the largest array is the proposal's cell coordinates.
+
+**Abort.**
+- **The interface gains `abort()`** (hardware interface, both backends). It only sets a flag, so it is safe inside a JS_Server interrupt. `LuminosRig` acts on it in its acquisition wait: it calls `app.abortAcquisition`, waits for Luminos to finish, then raises `hadamard_stim:Aborted`. Every later operation refuses until the next `begin`.
+- **The trial in progress is not recorded.** Resuming repeats it from the last checkpoint, exactly as after a failure. `TestControllerSession` checks that an aborted and resumed run writes the same trial records as an uninterrupted one.
+- **Stop-after-trial is unchanged.**
+
+**Protocol changes (observation and display only; no parity output changed):**
+- **`report_phase`** is an optional observer, called in `run_trial` and `run_z_reference`. Without `env.phase_changed` it does nothing.
+- **`acquire_reference_image`** (spec kind `reference_scan`) formalises the step Yitong did by hand before his script: one Hadamard scan, reconstructed, as the image cells are found on. It uses the drift scan's patterns (over the scan area) at the `cfg.scan` settings and does not move the stage. *Open (rig):* whether his app's Hadamard function used the same pattern area. A provided image (`set_reference_image`) remains possible.
+- **`static_image_seg_v5` also returns the skipped candidates.** These are the `n_exclude` candidates with the highest contrast. They are kept as `cells.excluded_coord` for display and the recipe. `x`, `y` and `min_val` are unchanged; the excluded candidates are exactly the last `n_exclude` rows of a run with `threshold + n_exclude` and nothing skipped (tested).
+
+**Preflight is one check per requirement** (id, label, pass/fail/not_needed, message). The adapter's preflight is restructured without changing its `failures`. The backend adds:
+- named scan-calibration folders;
+- a writable data folder;
+- each of the four recorded Firefly checks.
+
+`report.calibration` gives the blue calibration's status (valid/missing/invalid) as a run would resolve it.
+
+**Views** (`controller_view`) are computed in MATLAB, so the tab draws and never calculates:
+- **segmentation:** a PNG of the reference and each cell's number, coordinate and spots, in `cell_coord` order (= matrix row); also the excluded candidates and `min_val`. About 340 KB, fetched on demand.
+- **pattern:** cell numbers on in matrix code k, or in pattern k of the last trial as played.
+- **also:** summary, saved recipe (without per-cell arrays), checkpoint (read through `load_checkpoint`, so it refuses what resume would refuse), diagnostics (read only) and resumable run folders.
+
+**Decisions.**
+- **Changing rig settings, or preparing, drops the proposal.** The DMD masks were drawn with the old geometry, so both are allowed only before the cells are approved.
+- **Resume uses the checkpoint only.** If the prepared calibration differs from the one the run recorded, the checkpoint view flags it but does not refuse. *Open:* whether resume should refuse instead.
+- **The default run folder** is `<Luminos data folder>/<HHmmss>_<prefix>_hadamard_stim`. The Resume panel lists run folders under the user's dated data folders.
+
+**Tests.**
+- **Package:** `TestControllerSession` (10), `TestUiViews` (8), `TestLuminosBackend` (8: tab path versus programmatic path, same acquisitions, samples, DMD contents and stage moves; abort during a hung acquisition), `TestUiBoundary` (3).
+- **Luminos:** `TestHadamardStimDevice` (5). The frontend has 10 vitest tests, including a source scan for protocol vocabulary and for any MATLAB call outside the three endpoints.
+- **Unchanged:** the Phase 3 and 4 tests.
+- **Result:** `run_tests('full')` under the 12 GB cap: 175 passed, 0 failed (peak 4.5 GB, 21 min). Frontend: typecheck clean, 153/153 vitest, and the production bundle builds.
+
+**Still needs Firefly**, now through the tab: the Phase 2 and Phase 4 lists, plus:
+- the reference scan's pattern area;
+- the tab's Abort during a real acquisition (`app.abortAcquisition` from the wait loop).
+
 ## Parity issues (behaviour that may be a bug; reproduced, not fixed)
 
 - **P1. Reference-image orientation changed after the experiments.** `hadamard_ref.m` gained a transpose on 2026-02-10, after his 2025 data, alongside a Kinetix MEX change. In the newest snapshot, segmentation would run on the transposed image while drift correction compares untransposed scans with the untransposed `hadamard_ref`. The fixtures follow his 2025-03-08 session, which is the untransposed behaviour he actually ran. In Luminos the reference image, scans and DMD calibration must all share Luminos's camera orientation. **Confirmed 2026-10-13: the port follows the untransposed 2025 behaviour.** The transposed `hadamard_ref.m` stays frozen only as evidence.

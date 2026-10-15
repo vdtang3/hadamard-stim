@@ -34,6 +34,7 @@ acquisitions = cell(1, nZ + 1);
 iRpt = 1;
 for iz = 1:nZ+1
     zi = Z0+zStep*(iz-1);
+    hadamard_stim.protocol.report_phase(env, "z_reference", struct("plane", iz, "n_planes", nZ + 1));
     hw.motor_move_to(zi);
     folder = string(sprintf([char(prefix) 'z%02u_rpt%02i'], [iz iRpt]));
     spec = hadamard_stim.protocol.acquisition_spec("z_stack_plane", folder, waveform, ...

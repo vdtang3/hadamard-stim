@@ -3,7 +3,8 @@ function spec = acquisition_spec(kind, folder, waveform, options)
 %
 %   spec = hadamard_stim.protocol.acquisition_spec(kind, folder, waveform, ...)
 %
-%   kind      "z_stack_plane", "drift_scan" or "stimulation"
+%   kind      "z_stack_plane", "drift_scan", "stimulation" or
+%             "reference_scan" (acquire_reference_image)
 %   folder    his folder name for it (the rig prefixes a time stamp)
 %   waveform  struct from scan_waveform or stimulation_waveform
 %
@@ -11,7 +12,7 @@ function spec = acquisition_spec(kind, folder, waveform, options)
 %   struct array. The hardware adapter reads waveform.amplitude and the
 %   camera fields; everything else is for the record.
 arguments
-    kind (1, 1) string {mustBeMember(kind, ["z_stack_plane" "drift_scan" "stimulation"])}
+    kind (1, 1) string {mustBeMember(kind, ["z_stack_plane" "drift_scan" "stimulation" "reference_scan"])}
     folder (1, 1) string
     waveform struct
     options.trial (1, 1) double = NaN

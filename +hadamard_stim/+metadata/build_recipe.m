@@ -43,6 +43,9 @@ recipe.cells.illum_rois = canonical.illum_rois;
 recipe.cells.stim_rois = canonical.stim_rois;
 recipe.cells.illum_mask_sha256 = hadamard_stim.metadata.sha256(canonical.illum_mask);
 recipe.cells.stim_mask_sha256 = hadamard_stim.metadata.sha256(canonical.stim_mask);
+if isfield(canonical, "excluded_coord")
+    recipe.cells.excluded_coord = canonical.excluded_coord;
+end
 if isfield(canonical, "min_val")
     recipe.cells.min_val = canonical.min_val;
 end

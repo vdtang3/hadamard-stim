@@ -1,7 +1,7 @@
-function [x_out, y_out, min_val] = static_image_seg_v5(im, thres, n_exclude)
+function [x_out, y_out, min_val, excluded] = static_image_seg_v5(im, thres, n_exclude)
 %STATIC_IMAGE_SEG_V5 Yitong's cell finder for the Auto Square patterns.
 %
-%   [x, y, min_val] = hadamard_stim.yitong.static_image_seg_v5(im, thres, n_exclude)
+%   [x, y, min_val, excluded] = hadamard_stim.yitong.static_image_seg_v5(im, thres, n_exclude)
 %
 %   im         reference image (camera orientation)
 %   thres      number of cells to keep (his ThresholdEditField, 320)
@@ -11,7 +11,8 @@ function [x_out, y_out, min_val] = static_image_seg_v5(im, thres, n_exclude)
 %   x, y are the cells' maximum pixels (column, row), in ascending order of
 %   contrast. That order assigns the stimulation matrix's rows, so it is
 %   part of the protocol. min_val is the curve he plotted to choose
-%   n_exclude (figure 51).
+%   n_exclude (figure 51). excluded is [x y] of the n_exclude skipped
+%   candidates, in ascending contrast, for display and the record only.
 %
 %   Behaviour kept for parity (notebook, P4): it errors when two region
 %   maxima tie in value, and when there are fewer than 1000 watershed
@@ -20,7 +21,8 @@ function [x_out, y_out, min_val] = static_image_seg_v5(im, thres, n_exclude)
 %   Port of tests/yitong_reference/dragonfly/Utilities/static_image_seg_v5.m
 %   SHA-256 81da03515d32a6aeb8184b8eedfe5839c28ad8db18b4b1e8f6a49c0a985246a6
 %   Changes: n_exclude is an argument instead of input(); min_val is
-%   returned instead of plotted; figures and commented-out code removed.
+%   returned instead of plotted; the skipped candidates are returned
+%   (excluded); figures and commented-out code removed.
 arguments
     im {mustBeNumeric}
     thres (1, 1) double = 50
@@ -97,4 +99,6 @@ goodROI2 = idxSort((end-thres+1:end) - x);
 
 x_out = ctr_c(goodROI2)/upsampl;
 y_out = ctr_r(goodROI2)/upsampl;
+skipped = idxSort(end-x+1:end);
+excluded = [ctr_c(skipped) ctr_r(skipped)]/upsampl;
 end

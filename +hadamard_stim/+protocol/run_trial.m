@@ -13,6 +13,7 @@ record = struct("trial", iTrial, "started_utc", utc_now(), "kind", "", "folder",
 record.retarget = mod(iTrial, cfg.drift.retarget_every) == 0 || iTrial == 1;
 if record.retarget
     if cfg.drift.enabled
+        hadamard_stim.protocol.report_phase(env, "drift_correction", struct("trial", iTrial));
         [state, record.correction] = hadamard_stim.protocol.run_drift_correction(cfg, env, state, iTrial);
     end
     if iTrial > 1 && cfg.bleaching.enabled
@@ -29,13 +30,16 @@ end
 trialRatio = cfg.trials.n_trial / (cfg.trials.n_trial - cfg.trials.n_sparse);
 sparse = mod(iTrial, trialRatio) ~= 0;
 if sparse && ~cfg.trials.run_sparse
+    hadamard_stim.protocol.report_phase(env, "skipped", struct("trial", iTrial));
     record.kind = "sparse";
     record.skipped = true;
     return
 end
 if sparse
+    hadamard_stim.protocol.report_phase(env, "sparse", struct("trial", iTrial));
     [state, plan] = plan_sparse_trial(cfg, env, state, iTrial);
 else
+    hadamard_stim.protocol.report_phase(env, "hadamard", struct("trial", iTrial));
     [state, plan] = plan_hadamard_trial(cfg, env, state, iTrial);
 end
 

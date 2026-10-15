@@ -49,6 +49,12 @@ classdef FakeAlpDmd < hadamard_stim.testing.FakeLuminosDevice
             tf = obj.SupportsQueue;
         end
 
+        function state = Get_Queue_State(obj)
+            % The real one returns the MEX's view of the ALP queue.
+            state = struct("n_sequences", numel(obj.sequence_queue), ...
+                "displaying", obj.Displaying);
+        end
+
         function previous = Claim_Pattern_Ownership(obj, owner)
             obj.check("Claim_Pattern_Ownership");
             already = obj.pattern_owner == owner;

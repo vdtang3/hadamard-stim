@@ -15,15 +15,19 @@ function plan = camera_plan(spec, camera_names, profile)
 %   per rising edge of its trigger row, exactly as the protocol's samples
 %   say, and the imaging camera's count must equal spec.n_frames. Luminos
 %   records every camera, so a camera the protocol does not trigger takes
-%   one free-running frame ("Off").
-rows = string(spec.waveform.channels(:));
-imaging_frames = rising_edges(spec.waveform, rows, profile.camera_trigger_row);
+%   one free-running frame ("Off"). The face camera is triggered only when
+%   spec.streams.face_camera is on; otherwise its trigger row is not driven
+%   (LuminosRig) and it is left like any other untriggered camera.
+imaging_frames = hadamard_stim.waveform.rising_edges(spec.waveform, profile.camera_trigger_row);
 if imaging_frames ~= spec.n_frames
     error("hadamard_stim:CameraFrameMismatch", ...
         "The %s waveform triggers the camera %d times but the acquisition expects %d frames.", ...
         spec.kind, imaging_frames, spec.n_frames);
 end
-behavior_frames = rising_edges(spec.waveform, rows, profile.behavior_trigger_row);
+behavior_frames = 0;
+if ~isfield(spec, "streams") || isequal(spec.streams.face_camera, true)
+    behavior_frames = hadamard_stim.waveform.rising_edges(spec.waveform, profile.behavior_trigger_row);
+end
 
 plan = struct("name", {}, "role", {}, "frametrigger_source", {}, ...
     "frames_requested", {}, "acquisition_exposure_s", {}, "file", {});
@@ -50,14 +54,4 @@ if ~any([plan.role] == "imaging")
     error("hadamard_stim:NoImagingCamera", "No camera named %s on this rig.", ...
         profile.devices.camera.name);
 end
-end
-
-function n = rising_edges(waveform, rows, name)
-k = find(rows == name, 1);
-if isempty(k)
-    n = 0;
-    return
-end
-x = waveform.amplitude(k, :) > 0;
-n = nnz(diff([false x]) > 0);
 end

@@ -18,7 +18,7 @@ function view = controller_view(controller, name, args)
 %     segmentation     reference image, numbered cells, spots, excluded
 %                      candidates, min_val (ui.segmentation_view)
 %     pattern          args.source "matrix" or "last_trial", args.index:
-%                      the cell numbers one pattern stimulates
+%                      the cell numbers one pattern stimulates (connectivity)
 %     summary          what will run / ran (ui.run_summary)
 %     recipe           the saved run recipe of the session's run folder,
 %                      without the per-cell arrays
@@ -83,7 +83,14 @@ end
 end
 
 function fields = fields_with_values(cfg)
+% Each field with its value, his, and whether it is one of the run's
+% deviations as validate_config reports them (only the fields the session
+% mode uses can be). The wheel encoder is off by default until Firefly's
+% wiring is checked, but he recorded it: his value is shown as on.
 yitong = hadamard_stim.default_config();
+yitong.behavior.wheel_encoder_enabled = true;
+report = hadamard_stim.validate_config(cfg);
+deviating = string({report.deviations.path});
 fields = hadamard_stim.ui.config_fields();
 [fields.value] = deal([]);
 [fields.yitong] = deal([]);
@@ -91,8 +98,7 @@ fields = hadamard_stim.ui.config_fields();
 for k = 1:numel(fields)
     fields(k).value = get_path(cfg, fields(k).path);
     fields(k).yitong = get_path(yitong, fields(k).path);
-    fields(k).deviates = ~fields(k).required && ~startsWith(fields(k).path, "trials.first") && ...
-        ~startsWith(fields(k).path, "trials.last") && ~isequal(fields(k).value, fields(k).yitong);
+    fields(k).deviates = ismember(fields(k).path, deviating);
 end
 end
 

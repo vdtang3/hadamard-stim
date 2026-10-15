@@ -16,6 +16,9 @@ function methods_ = hardware_interface()
 %                                          one picture per trigger
 %     dmd_load_queue(sequences, repeats)   sequences{k} canvas [W x L x n_k],
 %                                          played repeats(k) times in turn
+%     dmd_show_mask(mask)                  one picture, canvas [W x L], shown
+%                                          continuously with no triggers
+%                                          (spontaneous blocks)
 %     acq = acquire(spec)                  one synchronized acquisition of
 %                                          spec (acquisition_spec); returns
 %                                          spec plus what was done
@@ -37,5 +40,5 @@ function methods_ = hardware_interface()
 %                                          next begin. Safe to call from a
 %                                          callback while an operation waits.
 methods_ = ["motor_position" "motor_move_to" "dmd_load_stack" "dmd_load_queue" ...
-    "acquire" "movie_mean" "begin" "release" "abort"];
+    "dmd_show_mask" "acquire" "movie_mean" "begin" "release" "abort"];
 end

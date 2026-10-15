@@ -26,6 +26,19 @@ profile.devices.blue_modulator = struct("type", "NI_DAQ_Modulator", "name", "Blu
 % Which waveform rows trigger which camera.
 profile.camera_trigger_row = "cameraTrigger";
 profile.behavior_trigger_row = "grashopperTrigger";
+% Rows that only serve the face camera: its trigger and the 850 nm light.
+% With the face camera off they are not driven (the protocol's samples
+% are unchanged).
+profile.face_camera_rows = ["grashopperTrigger" "IRVoltage"];
+
+% The wheel encoder's A and B lines, sampled as buffered digital inputs on
+% the acquisition clock (wfm_data.di), as his DAQ sampled them into
+% DAQ_data. His dragonflySettings.m wiring; whether Firefly is still wired
+% this way is a Firefly check. The rig setting wheel_encoder_lines
+% overrides it.
+profile.wheel_encoder = struct("names", ["encoderA" "encoderB"], ...
+    "lines", ["Dev1/port0/line9" "Dev1/port0/line10"], ...
+    "source", "Yitong's dragonflySettings.m (encoderA, encoderB); not yet checked on Firefly");
 
 profile.daq_rate = 1e5;            % his DAQ ran on its own clock at 100 kHz
 
@@ -54,6 +67,7 @@ profile.standing_deviations = [
     "Waveform rows that are zero throughout an acquisition are not driven; his DAQ held them at 0 V. On Firefly some of those ports now belong to other devices (Heater Set Out, shutter405, Whisker Stim)."
     "Luminos ends every driven port at 0, so IRVoltage drops from 0.5 V to 0 V on the last sample and stays there between acquisitions."
     "The behaviour camera is recorded by Luminos in the same acquisition, triggered by his grashopperTrigger line, instead of by SpinView."
+    "The wheel encoder's A/B lines are recorded by Luminos as buffered digital inputs on the acquisition clock (output_data.mat), not in his settings.mat DAQ_data; his analogIn1 (ai0, unconnected in his data) is not recorded."
     "Scan pattern stacks are stepped on the rising trigger edge (Luminos Write_Stack), whatever edge the stimulation queue uses."
     "Stage moves go through the Newport controller, including its backlash correction on downward moves."
     "Luminos records every camera on the rig; cameras the protocol does not use take one free-running frame."

@@ -18,13 +18,16 @@ if checkpoint.recipe_hash ~= recipe.recipe_hash
 end
 
 cfg = recipe.config;
-state = hadamard_stim.protocol.new_run_state(cfg, arrays.canonical, arrays.reference);
-if ~isequal(state.had_mat, arrays.had_mat)
-    error("hadamard_stim:MatrixMismatch", ...
-        "The stimulation matrix no longer regenerates the recipe's; refusing to resume.");
+if hadamard_stim.metadata.session_mode(cfg) == "spontaneous"
+    state = hadamard_stim.protocol.new_spontaneous_state(cfg, arrays.canonical, arrays.reference);
+else
+    state = hadamard_stim.protocol.new_run_state(cfg, arrays.canonical, arrays.reference);
+    if ~isequal(state.had_mat, arrays.had_mat)
+        error("hadamard_stim:MatrixMismatch", ...
+            "The stimulation matrix no longer regenerates the recipe's; refusing to resume.");
+    end
 end
-for name = ["next_trial" "cnt" "cnt_had" "picked" "sparse_pictures" "orange_v" ...
-        "exposure_waveform_ms" "b0" "b1"]
+for name = hadamard_stim.metadata.checkpoint_fields(state)
     state.(name) = checkpoint.(name);
 end
 state.cells.current = checkpoint.cells_current;

@@ -14,8 +14,15 @@ classdef LuminosRig < handle
     %   motor_move_to(z)      stage.Move_To_Position(z), blocking
     %   dmd_load_stack(m)     pattern_stack + Write_Stack('slave'), owned
     %   dmd_load_queue(s, r)  Load_Sequence_Queue(owner, s, r, picture time, edge)
+    %   dmd_show_mask(m)      Target + Write_Static, owned (a static picture)
     %   acquire(spec)         install the waveform, set the cameras, run
-    %                         Waveform_Camera_Sync_Acquisition, wait for it
+    %                         Waveform_Camera_Sync_Acquisition, wait for it.
+    %                         spec.streams decides the companions: with the
+    %                         face camera off its trigger and IR rows are not
+    %                         driven and it is not triggered; with the wheel
+    %                         encoder on, its A/B lines (wheel_encoder_lines)
+    %                         are recorded as buffered digital inputs on the
+    %                         acquisition clock
     %   movie_mean(acq, f)    mean of frames f of the imaging camera's file
     %   release()             undo everything this object changed, DMD
     %                         ownership last; safe to call any number of times
@@ -57,6 +64,11 @@ classdef LuminosRig < handle
                 options.acquisition_function = @Waveform_Camera_Sync_Acquisition
                 options.timeout_margin_s (1, 1) double = 60
                 options.poll_s (1, 1) double = 0.05
+                % The encoder's A and B lines; empty means the profile's.
+                options.wheel_encoder_lines string = strings(1, 0)
+            end
+            if isempty(options.wheel_encoder_lines)
+                options.wheel_encoder_lines = options.profile.wheel_encoder.lines;
             end
             obj.App = app;
             obj.Profile = options.profile;
@@ -69,7 +81,8 @@ classdef LuminosRig < handle
         function report = begin(obj, cfg)
             obj.AbortRequested = false;
             report = hadamard_stim.luminos.preflight(obj.App, cfg, ...
-                blue_threshold=obj.Options.blue_threshold, profile=obj.Profile);
+                blue_threshold=obj.Options.blue_threshold, profile=obj.Profile, ...
+                wheel_encoder_lines=obj.Options.wheel_encoder_lines);
             if ~report.ok
                 return
             end
@@ -117,6 +130,9 @@ classdef LuminosRig < handle
                 end
                 if j.pattern_stack_saved
                     attempt("restore_pattern_stack", @() set_pattern_stack(dmd, j.pattern_stack));
+                end
+                if j.target_saved
+                    attempt("restore_target", @() set_target(dmd, j.target));
                 end
                 attempt("release_dmd_ownership", @() dmd.Release_Pattern_Ownership(obj.Profile.owner));
             end
@@ -178,6 +194,25 @@ classdef LuminosRig < handle
             obj.Journal.queue = hadamard_stim.metadata.queue_fingerprint(sequences, repeats);
         end
 
+        function dmd_show_mask(obj, mask)
+            obj.refuseIfAborted("showing the illumination mask");
+            dmd = obj.ownedDmd();
+            obj.requireCanvas(dmd, mask);
+            if size(mask, 3) ~= 1
+                error("hadamard_stim:PatternSize", "dmd_show_mask takes one picture, not %d.", size(mask, 3));
+            end
+            if ~obj.Journal.target_saved
+                obj.Journal.target = dmd.Target;
+                obj.Journal.target_saved = true;
+            end
+            obj.Journal.dmd_written = true;
+            dmd.Target = mask;
+            dmd.Write_Static();
+            % A static write frees any queue.
+            obj.Journal.queue_loaded = false;
+            dmd.Record_Owned_Pattern(obj.Profile.owner);
+        end
+
         % ---- Acquisition ------------------------------------------------
 
         function acq = acquire(obj, spec)
@@ -189,8 +224,18 @@ classdef LuminosRig < handle
             end
             cameras = reshape(obj.Devices.cameras, 1, []);
             plan = hadamard_stim.luminos.camera_plan(spec, string({cameras.name}), obj.Profile);
-            [records, driven] = hadamard_stim.luminos.daq_records(spec.waveform, obj.Profile);
-            n_samples = size(spec.waveform.amplitude, 2);
+            streams = spec_streams(spec);
+            skip = strings(1, 0);
+            if ~streams.face_camera
+                skip = obj.Profile.face_camera_rows;
+            end
+            encoder_lines = strings(1, 0);
+            if streams.wheel_encoder
+                encoder_lines = obj.Options.wheel_encoder_lines;
+            end
+            [records, driven] = hadamard_stim.luminos.daq_records(spec.waveform, obj.Profile, ...
+                skip_rows=skip, encoder_lines=encoder_lines);
+            n_samples = hadamard_stim.waveform.n_samples(spec.waveform);
 
             daq = obj.device("daq");
             obj.saveDaq(daq);
@@ -200,6 +245,9 @@ classdef LuminosRig < handle
             wf = obj.Journal.daq.wfm_data;
             wf.ao = records.ao;
             wf.do = records.do;
+            if ~isempty(records.di)
+                wf.di = append_inputs(field_or(wf, "di", []), records.di);
+            end
             daq.global_props = gp;
             daq.wfm_data = wf;
             if isprop(daq, "waveforms_built")
@@ -236,10 +284,28 @@ classdef LuminosRig < handle
             acq.luminos_folder = folder;
             acq.imaging = struct("camera", imaging.name, "file", fullfile(folder, imaging.file), ...
                 "frame_size", floor([roi(4) roi(2)] ./ double(camera.bin)), "frames", imaging.frames_requested);
-            acq.behavior = struct("camera", "", "file", "", "frames", 0);
-            if ~isempty(behavior)
-                acq.behavior = struct("camera", behavior.name, ...
-                    "file", fullfile(folder, behavior.file), "frames", behavior.frames_requested);
+            acq.behavior = struct("camera", "", "file", "", "frames", 0, ...
+                "status", "disabled in the configuration");
+            if streams.face_camera
+                acq.behavior.status = "not on this rig";
+                if ~isempty(behavior)
+                    acq.behavior = struct("camera", behavior.name, ...
+                        "file", fullfile(folder, behavior.file), "frames", behavior.frames_requested, ...
+                        "status", "recorded");
+                    if behavior.frames_requested <= 1 && behavior.frametrigger_source == "Off"
+                        acq.behavior.status = "not triggered by this waveform";
+                    end
+                end
+            end
+            acq.encoder = struct("status", "disabled in the configuration", "lines", strings(1, 0), ...
+                "names", strings(1, 0), "method", "", "rate_hz", NaN, "n_samples", 0, "file", "");
+            if streams.wheel_encoder
+                acq.encoder = struct("status", "recorded", "lines", encoder_lines, ...
+                    "names", obj.Profile.wheel_encoder.names(1:numel(encoder_lines)), ...
+                    "method", "Luminos buffered digital input (wfm_data.di) on the acquisition sample clock", ...
+                    "rate_hz", obj.DaqRate, "n_samples", n_samples, ...
+                    "file", fullfile(folder, "output_data.mat") + ...
+                    " (Device_Data, the DAQ's buffered digital-input task)");
             end
             acq.cameras = plan;
             acq.driven_ports = driven;
@@ -387,6 +453,7 @@ end
 function j = empty_journal()
 j = struct("dmd_claimed", false, "dmd_written", false, "queue_loaded", false, ...
     "pattern_stack_saved", false, "pattern_stack", [], "queue", [], ...
+    "target_saved", false, "target", [], ...
     "daq", [], "acquiring", false, ...
     "cameras", struct("device", {}, "frames_requested", {}, ...
         "frametrigger_source", {}, "acquisition_exposuretime", {}));
@@ -401,4 +468,36 @@ end
 
 function set_pattern_stack(dmd, stack)
 dmd.pattern_stack = stack;
+end
+
+function set_target(dmd, target)
+dmd.Target = target;
+end
+
+function streams = spec_streams(spec)
+streams = struct("face_camera", true, "wheel_encoder", false);
+if isfield(spec, "streams") && isstruct(spec.streams)
+    streams = spec.streams;
+end
+end
+
+function v = field_or(s, name, default)
+v = default;
+if isstruct(s) && isfield(s, name)
+    v = s.(name);
+end
+end
+
+function inputs = append_inputs(existing, ours)
+% The operator's own inputs stay; ours are added. Records may carry
+% different fields, so both are reduced to the ones Luminos reads.
+inputs = struct("name", {}, "port", {}, "script_owner", {});
+for r = reshape(existing, 1, [])
+    owner = "";
+    if isfield(r, "script_owner")
+        owner = string(r.script_owner);
+    end
+    inputs(end+1, 1) = struct("name", r.name, "port", r.port, "script_owner", char(owner)); %#ok<AGROW>
+end
+inputs = [inputs; ours(:)];
 end

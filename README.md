@@ -3,7 +3,10 @@
 MATLAB package that will run Yitong Qi's Firefly Hadamard protocol inside
 Luminos. The protocol combines sparse-pulse and Hadamard-coded patterned
 optogenetic stimulation with Hadamard structured-illumination scans, drift
-correction and bleaching compensation.
+correction and bleaching compensation. A second, simpler session mode
+records spontaneous activity in blocks, with no blue light, as his
+behaviour sessions did. Face video and the wheel encoder are optional
+companions of either mode.
 
 **v1 goal: behavioural parity with Yitong's code.** Each trial must load the
 same DMD sequence queue, drive the same DAQ samples and select the same cells
@@ -18,7 +21,7 @@ access, through a narrow adapter and a thin tab. The layout follows
 
 ## Status
 
-Phases 1 to 5 are complete off-rig.
+Phases 1 to 6 are complete off-rig.
 - Yitong's reference code is frozen, and golden fixtures are generated from it.
 - Luminos's ALP MEX has a sequence queue that matches his loader call for call.
 - The whole protocol runs on a simulated rig and reproduces his 640-trial trace exactly.
@@ -27,12 +30,19 @@ Phases 1 to 5 are complete off-rig.
 - The Luminos **Hadamard Stim** tab drives the same controller (Phase 5):
   preflight, prepare, reference scan, segmentation, z-reference, run, stop,
   abort and resume, with the recipe, deviations and rig diagnostics on view.
+- Session modes (Phase 6): **Connectivity** (the parity-tested protocol,
+  unchanged) and **Spontaneous** (orange-only voltage imaging in blocks,
+  optional drift correction between them). Face camera and wheel encoder are
+  switches: when off, nothing about them is required, driven or triggered,
+  and the recipe records that they were off.
 
 Real acquisition still needs:
 - the Firefly hardware checks listed in `docs/notebook.md`;
-- an active Luminos calibration of the blue modulator (none exists yet).
+- an active Luminos calibration of the blue modulator (none exists yet; a
+  spontaneous session does not need it).
 
-Next is validation on Firefly (Phase 6), carried out through the tab.
+Next is validation on Firefly, carried out through the tab, starting with a
+connectivity session with the face camera and wheel encoder off.
 
 ## Layout
 
@@ -45,8 +55,11 @@ Next is validation on Firefly (Phase 6), carried out through the tab.
   controller_view.m        the read-only display products a frontend may ask for
   backend_interface.m      what a controller asks a rig before it has an env
   +yitong/                 ports of his functions (source path + SHA-256 in each)
-  +protocol/               his script, step by step, on a hardware interface
-  +metadata/               run recipe, trial records, checkpoints
+  +protocol/               his scripts, step by step, on a hardware interface
+                           (run_protocol: connectivity; run_spontaneous: blocks)
+  +waveform/               reading a waveform in either form (dense samples,
+                           or a repeated description for long blocks)
+  +metadata/               run recipe, trial and block records, checkpoints
   +ui/                     display products: config fields, numbered cells,
                            patterns, summaries (read only, no hardware)
   +luminos/                the only code that touches Luminos (LuminosRig,
@@ -96,16 +109,21 @@ Firefly (Luminos `src/Users/Vincent.json` does):
 `blue_threshold` can be set there too, but it has no default: it is a power
 in the active blue calibration's own units (parity issue P2), not his 15.
 
-The **Hadamard Stim** tab then shows one shared controller. Work top to
-bottom: Preflight (read only, one line per requirement), Prepare rig,
-Take reference scan, Segment, Approve cells, Acquire z-reference, Run.
+The **Hadamard Stim** tab then shows one shared controller. Choose the
+session mode and the optional streams at the top (Session panel), then work
+through: Preflight (read only, one line per requirement; streams that are
+off show "disabled"), Prepare rig, Take reference scan, Segment, Approve
+cells, Acquire z-reference (not needed for a spontaneous session without
+drift correction), Run.
 Stop after this trial and Abort are honoured while a run is going; a
 stopped, failed or aborted run resumes from its checkpoint (Resume panel).
 If the blue or DMD calibration has changed since the run started, the
 Resume panel shows both and what that means, and resumes only after
 "Continue anyway"; each resume is recorded in the run's `resumes/` folder.
 The rig settings (blue threshold, calibration scan folders, the Firefly
-checks file) can also be set from the tab. The checks file records the
+checks file, the wheel encoder's A/B lines) can also be set from the tab.
+The encoder lines default to his wiring (`Dev1/port0/line9`, `line10`),
+which is not yet checked on Firefly. The checks file records the
 four Firefly checks as `{"driver": {"passed": true, "evidence": "...",
 "date": "..."}, "trigger_edge": ..., "queue_support": ..., "slide_queue": ...}`.
 

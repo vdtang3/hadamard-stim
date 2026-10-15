@@ -18,12 +18,19 @@ classdef HadamardStimController < handle
     %     CELLS_PROPOSED   segmentation run on the reference image; look at
     %                      the cells and min_val, then approve or re-run
     %     CELLS_APPROVED   the canonical geometry is fixed from here on
-    %     READY            reference z-stack acquired; a run can start
-    %     RUNNING          trials in progress (stop takes effect between
-    %                      trials; abort abandons the trial in progress)
+    %     READY            reference z-stack acquired (or, for a spontaneous
+    %                      session without drift correction, not needed);
+    %                      a run can start
+    %     RUNNING          trials or blocks in progress (stop takes effect
+    %                      between them; abort abandons the one in progress)
     %     STOPPED / COMPLETED / FAILED / ABORTED
     %   A stopped, failed or aborted run resumes from its folder's checkpoint.
     %   The rig is released before any of those last four is reported.
+    %
+    %   The configuration's session.mode decides what a run is: the
+    %   connectivity protocol (run_protocol, trials) or spontaneous imaging
+    %   (run_spontaneous, blocks). Everything else (setup, the rig, records,
+    %   checkpoints, abort, resume) is shared.
     %
     %   Everything a frontend may do goes through apply_controller_action;
     %   getState is what it shows, and controller_view the larger read-only
@@ -152,6 +159,13 @@ classdef HadamardStimController < handle
             obj.assertIdle("CELLS_PROPOSED");
             obj.Cells = obj.Proposal;
             obj.LifecycleState = "CELLS_APPROVED";
+            if ~needs_z_stack(obj.Config)
+                % A spontaneous session without drift correction compares
+                % against nothing: it is ready once the cells are fixed.
+                obj.Reference = struct("z_all", [], "z_focus", NaN, ...
+                    "had_z_stack", [], "had_ref", obj.ReferenceImage);
+                obj.LifecycleState = "READY";
+            end
             obj.bump();
         end
 
@@ -201,11 +215,16 @@ classdef HadamardStimController < handle
                     strjoin(report.errors, newline + "  "));
             end
             obj.assertHardwareValidated();
+            obj.assertReadyFor(obj.Config);
             if strlength(run_folder) == 0
                 obj.requireBackend();
                 run_folder = obj.Backend.default_run_folder(obj.Config);
             end
-            state = hadamard_stim.protocol.new_run_state(obj.Config, obj.Cells, obj.Reference);
+            if is_spontaneous(obj.Config)
+                state = hadamard_stim.protocol.new_spontaneous_state(obj.Config, obj.Cells, obj.Reference);
+            else
+                state = hadamard_stim.protocol.new_run_state(obj.Config, obj.Cells, obj.Reference);
+            end
             % Checked before the run folder exists, so a refused run leaves nothing.
             session = obj.beginHardware(); %#ok<NASGU>
             [recipe, arrays] = hadamard_stim.metadata.build_recipe(obj.Config, state, obj.Env.context);
@@ -236,8 +255,8 @@ classdef HadamardStimController < handle
             if strlength(run_folder) == 0
                 error("hadamard_stim:NoRunFolder", "Name the run folder to resume.");
             end
-            obj.assertHardwareValidated();
             [recipe, ~] = hadamard_stim.metadata.read_recipe(run_folder);
+            obj.assertHardwareValidated(recipe.config);
             state = hadamard_stim.metadata.load_checkpoint(run_folder);
             comparison = hadamard_stim.metadata.calibration_comparison(recipe, obj.Env.context);
             if comparison.changed && ~options.ContinueWithChangedCalibration
@@ -245,9 +264,10 @@ classdef HadamardStimController < handle
             end
             obj.Config = recipe.config;
             session = obj.beginHardware(); %#ok<NASGU>
+            position = next_position(state);
             file = hadamard_stim.metadata.write_resume_record(run_folder, recipe.recipe_hash, ...
-                state.next_trial, comparison, options.ContinueWithChangedCalibration);
-            obj.LastResume = struct("record", string(file), "next_trial", state.next_trial, ...
+                position, comparison, options.ContinueWithChangedCalibration);
+            obj.LastResume = struct("record", string(file), "position", position, ...
                 "calibration_changed", comparison.changed, ...
                 "continued_with_changed_calibration", comparison.changed && options.ContinueWithChangedCalibration);
             obj.Cells = state.cells.canonical;
@@ -296,7 +316,9 @@ classdef HadamardStimController < handle
             state.config_sha256 = hadamard_stim.metadata.sha256(unicode2native(jsonencode(obj.Config), "UTF-8"));
             state.config_errors = report.errors;
             state.mode = report.mode;
+            state.session_mode = hadamard_stim.metadata.session_mode(obj.Config);
             state.deviations = report.deviations;
+            state.warnings = report.warnings;
             state.has_reference_image = ~isempty(obj.ReferenceImage);
             state.reference = struct("revision", obj.ReferenceRevision, ...
                 "size", size(obj.ReferenceImage), "source", obj.ReferenceSource.kind, ...
@@ -315,21 +337,38 @@ classdef HadamardStimController < handle
             state.progress = [];
             if ~isempty(obj.RunState)
                 s = obj.RunState;
-                state.progress = struct("next_trial", s.next_trial, ...
-                    "first_trial", obj.Config.trials.first, ...
-                    "last_trial", obj.Config.trials.last, "orange_v", s.orange_v, ...
-                    "n_corrections", numel(s.cells.corrections), ...
-                    "stop_requested", obj.StopRequested, ...
-                    "abort_requested", obj.AbortRequested);
+                if isfield(s, "next_block")
+                    state.progress = struct("unit", "block", "next_block", s.next_block, ...
+                        "n_blocks", obj.Config.spontaneous.n_blocks, ...
+                        "block_frames", obj.Config.spontaneous.block_frames, ...
+                        "orange_v", s.orange_v, ...
+                        "n_corrections", numel(s.cells.corrections), ...
+                        "stop_requested", obj.StopRequested, ...
+                        "abort_requested", obj.AbortRequested);
+                else
+                    state.progress = struct("unit", "trial", "next_trial", s.next_trial, ...
+                        "first_trial", obj.Config.trials.first, ...
+                        "last_trial", obj.Config.trials.last, "orange_v", s.orange_v, ...
+                        "n_corrections", numel(s.cells.corrections), ...
+                        "stop_requested", obj.StopRequested, ...
+                        "abort_requested", obj.AbortRequested);
+                end
             end
             state.timing = struct("run_started_utc", utc_text(obj.RunStarted), ...
                 "run_ended_utc", utc_text(obj.RunEnded), "elapsed_s", obj.elapsedSeconds());
             state.last_trial = [];
+            state.last_block = [];
             if ~isempty(obj.LastRecord)
                 r = obj.LastRecord;
-                state.last_trial = struct("trial", r.trial, "kind", r.kind, ...
-                    "folder", r.folder, "skipped", r.skipped, "retarget", r.retarget, ...
-                    "started_utc", r.started_utc);
+                if isfield(r, "block")
+                    state.last_block = struct("block", r.block, "n_blocks", r.n_blocks, ...
+                        "folder", r.folder, "retarget", r.retarget, ...
+                        "started_utc", r.started_utc);
+                else
+                    state.last_trial = struct("trial", r.trial, "kind", r.kind, ...
+                        "folder", r.folder, "skipped", r.skipped, "retarget", r.retarget, ...
+                        "started_utc", r.started_utc);
+                end
             end
             state.last_error = obj.LastError;
             state.last_error_identifier = obj.LastErrorIdentifier;
@@ -361,7 +400,7 @@ classdef HadamardStimController < handle
             legal.propose_cells = early && env && ~isempty(obj.ReferenceImage);
             legal.approve_cells = idle && s == "CELLS_PROPOSED";
             legal.acquire_z_reference = idle && env && ismember(s, ["CELLS_APPROVED" "READY"]);
-            legal.start_run = idle && s == "READY";
+            legal.start_run = idle && s == "READY" && obj.hasZStackFor(obj.Config);
             legal.resume_run = idle && env && ismember(s, ["CONFIGURING" "READY" "STOPPED" "FAILED" "ABORTED"]);
             legal.stop_after_current = s == "RUNNING" && ~obj.StopRequested;
             legal.abort = ismember(obj.Activity, ["running" "z_reference" "scanning"]) && ~obj.AbortRequested;
@@ -387,10 +426,15 @@ classdef HadamardStimController < handle
             obj.notifyStatus();
             env = obj.observedEnv();
             env.after_trial = @(s, r) obj.afterTrial(s, r);
+            env.after_block = @(s, r) obj.afterBlock(s, r);
             env.stop_requested = @() obj.StopRequested;
             failure = [];
             try
-                state = hadamard_stim.protocol.run_protocol(obj.Config, env, state);
+                if is_spontaneous(obj.Config)
+                    state = hadamard_stim.protocol.run_spontaneous(obj.Config, env, state);
+                else
+                    state = hadamard_stim.protocol.run_protocol(obj.Config, env, state);
+                end
                 obj.RunState = state;
             catch err
                 failure = err;
@@ -401,14 +445,17 @@ classdef HadamardStimController < handle
             obj.RunEnded = datetime("now", "TimeZone", "UTC");
             if obj.AbortRequested
                 obj.LifecycleState = "ABORTED";
+                position = next_position(obj.RunState);
+                unit = string(fieldnames(position));
                 obj.LastError = sprintf(['Aborted by the operator; the rig has been released. ' ...
-                    'The run resumes at trial %d from its checkpoint.'], obj.RunState.next_trial);
+                    'The run resumes at %s %d from its checkpoint.'], ...
+                    extractAfter(unit, "next_"), position.(unit));
                 obj.LastErrorIdentifier = "hadamard_stim:Aborted";
             elseif ~isempty(failure)
                 obj.LifecycleState = "FAILED";
                 obj.LastError = string(failure.message);
                 obj.LastErrorIdentifier = string(failure.identifier);
-            elseif state.next_trial > obj.Config.trials.last
+            elseif is_complete(obj.Config, state)
                 obj.LifecycleState = "COMPLETED";
             else
                 obj.LifecycleState = "STOPPED";
@@ -425,6 +472,18 @@ classdef HadamardStimController < handle
             % Record first, then checkpoint: a checkpoint never points past
             % a trial whose record is missing.
             hadamard_stim.metadata.write_trial_record(obj.RunFolder, record, obj.RecipeHash);
+            hadamard_stim.metadata.save_checkpoint(obj.RunFolder, state, obj.RecipeHash);
+            obj.RunState = state;
+            obj.LastRecord = record;
+            obj.bump();
+            if ~isempty(obj.ProgressChangedFcn)
+                obj.ProgressChangedFcn(obj);
+            end
+        end
+
+        function afterBlock(obj, state, record)
+            % As afterTrial: the record first, then the checkpoint.
+            hadamard_stim.metadata.write_block_record(obj.RunFolder, record, obj.RecipeHash);
             hadamard_stim.metadata.save_checkpoint(obj.RunFolder, state, obj.RecipeHash);
             obj.RunState = state;
             obj.LastRecord = record;
@@ -553,8 +612,12 @@ classdef HadamardStimController < handle
 
         % ---- Hardware sessions --------------------------------------------
 
-        function assertHardwareValidated(obj)
-            gate = hadamard_stim.metadata.hardware_gate(obj.Env.context);
+        function assertHardwareValidated(obj, cfg)
+            if nargin < 2
+                cfg = obj.Config;
+            end
+            gate = hadamard_stim.metadata.hardware_gate(obj.Env.context, ...
+                hadamard_stim.metadata.session_mode(cfg));
             if ~gate.ok
                 error("hadamard_stim:HardwareNotValidated", ...
                     ['Firefly has not passed the checks a real acquisition needs: %s. ' ...
@@ -595,6 +658,27 @@ classdef HadamardStimController < handle
         end
 
         % ---- Checks -------------------------------------------------------
+
+        function assertReadyFor(obj, cfg)
+            % What a run of this mode needs from the setup: the reference
+            % z-stack when it drift-corrects, a blue calibration when it
+            % stimulates.
+            if ~obj.hasZStackFor(cfg)
+                error("hadamard_stim:NoZReference", ...
+                    "This session drift-corrects against the reference z-stack; acquire it first.");
+            end
+            if ~is_spontaneous(cfg) && (~isfield(obj.Env, "blue_calibration") || isempty(obj.Env.blue_calibration))
+                error("hadamard_stim:NoBlueCalibration", ...
+                    ['A connectivity session stimulates, and the rig was prepared without a usable ' ...
+                     'blue calibration. Calibrate the blue LED in Luminos, then prepare the rig again.']);
+            end
+        end
+
+        function tf = hasZStackFor(obj, cfg)
+            tf = ~needs_z_stack(cfg) || ...
+                (~isempty(obj.Reference) && isfield(obj.Reference, "had_z_stack") ...
+                && ~isempty(obj.Reference.had_z_stack));
+        end
 
         function requireBackend(obj)
             if isempty(obj.Backend)
@@ -641,8 +725,8 @@ classdef HadamardStimController < handle
                 case "running"
                     word = "running";
                     if ~isempty(obj.Phase)
-                        word = replace(obj.Phase.name, ["sparse" "hadamard"], ...
-                            ["sparse_pulse" "hadamard_trial"]);
+                        word = replace(obj.Phase.name, ["sparse" "hadamard" "spontaneous"], ...
+                            ["sparse_pulse" "hadamard_trial" "spontaneous_block"]);
                     end
                 case ""
                     switch obj.LifecycleState
@@ -674,7 +758,8 @@ classdef HadamardStimController < handle
             if isfield(context, "blue_calibration")
                 s.blue_calibration = context.blue_calibration;
             end
-            gate = hadamard_stim.metadata.hardware_gate(context);
+            gate = hadamard_stim.metadata.hardware_gate(context, ...
+                hadamard_stim.metadata.session_mode(obj.Config));
             s.hardware_gate = struct("ok", gate.ok, "missing", gate.missing);
         end
 
@@ -759,4 +844,31 @@ if isempty(parts)
     parts = string(jsonencode(identity));
 end
 text = strjoin(parts, ", ");
+end
+
+function tf = is_spontaneous(cfg)
+tf = hadamard_stim.metadata.session_mode(cfg) == "spontaneous";
+end
+
+function tf = needs_z_stack(cfg)
+% Connectivity always takes it (his first cell); spontaneous only when it
+% drift-corrects between blocks.
+tf = ~is_spontaneous(cfg) || isequal(cfg.spontaneous.drift_correction, true);
+end
+
+function tf = is_complete(cfg, state)
+if isfield(state, "next_block")
+    tf = state.next_block > cfg.spontaneous.n_blocks;
+else
+    tf = state.next_trial > cfg.trials.last;
+end
+end
+
+function position = next_position(state)
+% Where a run resumes: the next trial or the next block.
+if isfield(state, "next_block")
+    position = struct("next_block", state.next_block);
+else
+    position = struct("next_trial", state.next_trial);
+end
 end

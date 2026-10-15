@@ -24,7 +24,10 @@ comparison = struct("blue", side(recipe.calibrations.blue), ...
 if isempty(context) || ~isstruct(context)
     return
 end
-if isfield(context, "blue_calibration")
+% A spontaneous session uses no blue light: its blue calibration is
+% recorded but not compared.
+spontaneous = isfield(recipe, "session_mode") && recipe.session_mode == "spontaneous";
+if isfield(context, "blue_calibration") && ~spontaneous
     current = context.blue_calibration.identity;
     comparison.blue.current = current;
     comparison.blue.matches = isequal(jsonencode(comparable(recipe.calibrations.blue)), ...

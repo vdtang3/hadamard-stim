@@ -12,6 +12,7 @@ classdef SimulatedRig < handle
     %     hw.dmd_load_stack(masks)            scan patterns, canvas [W x L x n]
     %     hw.dmd_load_queue(sequences, repeats)
     %                                         sequences{k} canvas [W x L x n_k]
+    %     hw.dmd_show_mask(mask)              one static picture, canvas [W x L]
     %     acq = hw.acquire(spec)              one synchronized acquisition
     %     im = hw.movie_mean(acq, frames)     mean of those frames of its movie
     %     report = hw.begin(cfg)              always ready (see readiness)
@@ -77,6 +78,13 @@ classdef SimulatedRig < handle
             obj.stack = struct("sha256", "", "size", [0 0 0]);
         end
 
+        function dmd_show_mask(obj, mask)
+            obj.check("dmd_show_mask");
+            his = permute(mask, [2 1 3]);
+            obj.stack = struct("sha256", hadamard_stim.metadata.sha256(his), "size", size(his, [1 2 3]));
+            obj.queue = [];
+        end
+
         function acq = acquire(obj, spec)
             obj.check("acquire");
             acq = spec;
@@ -96,8 +104,11 @@ classdef SimulatedRig < handle
                     acq.drift_scan_number = NaN;
                     acq.stim_index = obj.n_stim;
                     obj.n_stim = obj.n_stim + 1;
+                case "spontaneous"
+                    acq.drift_scan_number = NaN;
+                    acq.stim_index = NaN;
             end
-            if spec.kind ~= "stimulation"
+            if ~ismember(spec.kind, ["stimulation" "spontaneous"])
                 acq.image = obj.world.scan_image(obj, acq);
             end
             stored = rmfield(acq, intersect(fieldnames(acq), ["waveform" "image"]));

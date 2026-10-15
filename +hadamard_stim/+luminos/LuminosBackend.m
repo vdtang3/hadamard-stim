@@ -20,6 +20,8 @@ classdef LuminosBackend < handle
     %                               true, "evidence": "...", "date": "..."}, ...}
     %     run_root                  where new run folders go; empty means
     %                               Luminos's data folder for the day
+    %     wheel_encoder_lines       the encoder's A and B digital lines;
+    %                               empty means his wiring (firefly_profile)
     %
     %   Options for tests: calibration_movies, acquisition_function, profile.
 
@@ -37,6 +39,7 @@ classdef LuminosBackend < handle
                 options.calibration_folders string = strings(0, 1)
                 options.hardware_validation_file (1, 1) string = ""
                 options.run_root (1, 1) string = ""
+                options.wheel_encoder_lines string = strings(1, 0)
                 options.calibration_movies cell = {}
                 options.acquisition_function = @Waveform_Camera_Sync_Acquisition
                 options.profile struct = hadamard_stim.luminos.firefly_profile()
@@ -45,11 +48,13 @@ classdef LuminosBackend < handle
             obj.Options = options;
             obj.Settings = struct("blue_threshold", [], ...
                 "calibration_folders", strings(0, 1), ...
-                "hardware_validation_file", "", "run_root", "");
+                "hardware_validation_file", "", "run_root", "", ...
+                "wheel_encoder_lines", strings(1, 0));
             obj.set_settings(struct("blue_threshold", options.blue_threshold, ...
                 "calibration_folders", options.calibration_folders, ...
                 "hardware_validation_file", options.hardware_validation_file, ...
-                "run_root", options.run_root));
+                "run_root", options.run_root, ...
+                "wheel_encoder_lines", options.wheel_encoder_lines));
         end
 
         function s = settings(obj)
@@ -77,6 +82,20 @@ classdef LuminosBackend < handle
                         end
                         v = string(v);
                         s.calibration_folders = reshape(v(strlength(v) > 0), [], 1);
+                    case "wheel_encoder_lines"
+                        if iscell(v)
+                            v = string(v);
+                        end
+                        if ~isempty(v) && ~(isstring(v) || ischar(v))
+                            error("hadamard_stim:InvalidSetting", "wheel_encoder_lines must be two line names, or empty.");
+                        end
+                        v = string(v);
+                        v = reshape(v(strlength(v) > 0), 1, []);
+                        if ~ismember(numel(v), [0 2])
+                            error("hadamard_stim:InvalidSetting", ...
+                                "wheel_encoder_lines must name two lines (A and B), or be empty for his wiring.");
+                        end
+                        s.wheel_encoder_lines = v;
                     case {"hardware_validation_file" "run_root"}
                         if isempty(v)
                             v = "";
@@ -95,16 +114,24 @@ classdef LuminosBackend < handle
         function report = preflight(obj, cfg)
             % Read only. Every requirement of a real run, as checks.
             report = hadamard_stim.luminos.preflight(obj.App, cfg, ...
-                blue_threshold=obj.Settings.blue_threshold, profile=obj.Options.profile);
+                blue_threshold=obj.Settings.blue_threshold, profile=obj.Options.profile, ...
+                wheel_encoder_lines=obj.Settings.wheel_encoder_lines);
             report = rmfield(report, "devices");
             checks = report.checks;
+            mode = hadamard_stim.metadata.session_mode(cfg);
 
-            needs_scans = cfg.z_reference.enabled || cfg.drift.enabled;
+            if mode == "spontaneous"
+                needs_scans = isequal(cfg.spontaneous.drift_correction, true);
+                why_not = "Not needed: drift correction between blocks is off.";
+            else
+                needs_scans = cfg.z_reference.enabled || cfg.drift.enabled;
+                why_not = "Not needed: z-reference and drift correction are off.";
+            end
             [ok, message] = obj.scanCalibrationReady(needs_scans);
             checks(end+1) = check("scan_calibration", "His Hadamard calibration scans are named", ok, message);
             if ~needs_scans
                 checks(end).status = "not_needed";
-                checks(end).message = "Not needed: z-reference and drift correction are off.";
+                checks(end).message = why_not;
             end
 
             folder = obj.dataRoot();
@@ -113,7 +140,14 @@ classdef LuminosBackend < handle
 
             [validation, message] = obj.hardwareValidation();
             gate = hadamard_stim.metadata.hardware_gate(struct("hardware_validation", validation));
+            needed = hadamard_stim.metadata.hardware_checks(mode);
             for name = ["driver" "trigger_edge" "queue_support" "slide_queue"]
+                if ~ismember(name, needed)
+                    checks(end+1) = struct("id", "firefly_" + name, ...
+                        "label", "Firefly check recorded: " + name, "status", "not_needed", ...
+                        "message", "Not needed: spontaneous blocks use no sequence queue or DMD triggers."); %#ok<AGROW>
+                    continue
+                end
                 ok = ~ismember(name, gate.missing);
                 text = message;
                 if ok
@@ -142,7 +176,8 @@ classdef LuminosBackend < handle
                 calibration_folders=obj.Settings.calibration_folders, ...
                 hardware_validation=validation, ...
                 acquisition_function=obj.Options.acquisition_function, ...
-                profile=obj.Options.profile);
+                profile=obj.Options.profile, ...
+                wheel_encoder_lines=obj.Settings.wheel_encoder_lines);
         end
 
         function d = diagnostics(obj)

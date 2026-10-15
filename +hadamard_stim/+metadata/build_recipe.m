@@ -15,6 +15,14 @@ function [recipe, arrays] = build_recipe(cfg, state, context)
 %     .simulated           true off the rig
 %     .hardware_validation the Firefly checks (hardware_gate), recorded
 %     .hardware            optional: rig facts (hadamard_stim.luminos.hardware_facts)
+%     .streams             optional: the face camera's and encoder's
+%                          hardware (stream_record)
+%
+%   state is new_run_state for a connectivity session or
+%   new_spontaneous_state for a spontaneous one. The recipe says which
+%   (session_mode), which optional streams were recorded or deliberately
+%   left off (streams), and how the session differs from his collection
+%   without changing what it measures (warnings).
 %
 %   recipe is JSON-safe; every later record carries recipe.recipe_hash, the
 %   SHA-256 of its canonical JSON. arrays holds what is too big for JSON
@@ -33,8 +41,11 @@ recipe.kind = "hadamard_stim_run_recipe";
 recipe.schema_version = "1.0.0";
 recipe.created_utc = string(datetime("now", "TimeZone", "UTC", "Format", "yyyy-MM-dd'T'HH:mm:ss'Z'"));
 recipe.mode = report.mode;
+recipe.session_mode = hadamard_stim.metadata.session_mode(cfg);
 recipe.config = cfg;
 recipe.deviations = report.deviations;
+recipe.warnings = report.warnings;
+recipe.streams = hadamard_stim.metadata.stream_record(cfg, context);
 recipe.standing_deviations = context.standing_deviations(:)';
 
 recipe.cells.n_cells = size(canonical.cell_coord, 1);
@@ -50,13 +61,19 @@ if isfield(canonical, "min_val")
     recipe.cells.min_val = canonical.min_val;
 end
 
-recipe.matrix = struct("order", cfg.matrix.order, "seed", 0, "generator", "twister", ...
-    "sha256", hadamard_stim.metadata.sha256(state.had_mat));
+recipe.matrix = [];
+if isfield(state, "had_mat")
+    recipe.matrix = struct("order", cfg.matrix.order, "seed", 0, "generator", "twister", ...
+        "sha256", hadamard_stim.metadata.sha256(state.had_mat));
+end
 
 recipe.reference.z_all = ref.z_all;
 recipe.reference.z_focus = field_or(ref, "z_focus", NaN);
 recipe.reference.had_ref_sha256 = hadamard_stim.metadata.sha256(ref.had_ref);
-recipe.reference.had_z_stack_sha256 = hadamard_stim.metadata.sha256(ref.had_z_stack);
+recipe.reference.had_z_stack_sha256 = "";
+if ~isempty(ref.had_z_stack)
+    recipe.reference.had_z_stack_sha256 = hadamard_stim.metadata.sha256(ref.had_z_stack);
+end
 if isfield(ref, "acquisitions") && ~isempty(ref.acquisitions)
     recipe.reference.folders = [ref.acquisitions.folder];
 end
@@ -81,7 +98,9 @@ recipe.recipe_hash = recipe_hash(recipe);
 
 arrays.canonical = canonical;
 arrays.reference = ref;
-arrays.had_mat = state.had_mat;
+if isfield(state, "had_mat")
+    arrays.had_mat = state.had_mat;
+end
 end
 
 function h = recipe_hash(recipe)

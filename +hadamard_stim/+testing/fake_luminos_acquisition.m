@@ -3,7 +3,9 @@ function fake_luminos_acquisition(app, bins, options)
 %
 %   Plays the DAQ the way Luminos builds it (DAQ.Calculate_tvec, feval of
 %   each record's wavefile, the last sample of every port forced to 0) and
-%   logs, per port, the SHA-256 of what would have been output. Cameras
+%   logs, per port, the SHA-256 of what would have been output; digital
+%   inputs (wfm_data.di) are logged by port. Each row is built and hashed
+%   in turn, as Luminos holds them, so a long block's peak is a few rows. Cameras
 %   get frames<k>.bin of the requested size (sparse, all zero) in a new
 %   folder <datafolder>/<NNNNNN><tag> with an output_data.mat.
 arguments
@@ -27,6 +29,14 @@ gp = daq.global_props;
 N = round(gp.total_time * gp.rate);
 tvec = linspace(0, 1/gp.rate*(N - 1), N);
 ports = struct("port", {}, "kind", {}, "sha256", {}, "n_samples", {}, "final", {});
+% Inputs are recorded, not played: logged with the samples they would
+% take, and no data.
+if isfield(daq.wfm_data, "di")
+    for r = reshape(daq.wfm_data.di, 1, [])
+        ports(end+1) = struct("port", string(r.port), "kind", "di", "sha256", "", ...
+            "n_samples", N, "final", NaN); %#ok<AGROW>
+    end
+end
 for kind = ["ao" "do"]
     for r = reshape(daq.wfm_data.(kind), 1, [])
         params = r.params;
@@ -60,7 +70,7 @@ dmd = app.getDevice("ALP_DMD");
 record = struct("tag", string(options.tag), "folder", folder, "rate", gp.rate, ...
     "n_samples", N, "ports", ports, "cameras", cams, ...
     "stack", dmd.Stack, "queue", dmd.Queue, "queue_settings", dmd.QueueSettings, ...
-    "dmd_owner", dmd.pattern_owner);
+    "dmd_owner", dmd.pattern_owner, "dmd_showing", dmd.Displaying);
 if isempty(app.Acquisitions)
     app.Acquisitions = record;
 else

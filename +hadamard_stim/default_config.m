@@ -17,8 +17,21 @@ function cfg = default_config()
 %
 %   Changing anything else leaves Yitong-compatible mode; validate_config
 %   reports each difference as a deviation.
-cfg.schema_version = "1.0.0";
+%
+%   Two kinds of session share this configuration (session.mode):
+%     "connectivity"  his sparse-pulse and coded stimulation trials
+%                     (RunSynchronizedAQMulti_sparse_pulse_hadamard_behavior_v1)
+%     "spontaneous"   voltage imaging in blocks with no blue light
+%                     (RunSynchronizedAQMulti_behavior_NPY_GFP_v1)
+%   Face video and the wheel encoder (behavior.*) are optional companions
+%   of either; turning one off is a warning, not a deviation.
+cfg.schema_version = "1.1.0";
 cfg.mode = "yitong_compatible";
+
+cfg.session.mode = "connectivity";
+
+cfg.behavior.face_camera_enabled = true;     % he recorded face video in every paper session
+cfg.behavior.wheel_encoder_enabled = false;  % he recorded it too; off until Firefly's wiring is checked
 
 cfg.naming.prefix = "";
 
@@ -80,6 +93,14 @@ cfg.z_reference.label = "Arch";
 cfg.drift.enabled = true;
 cfg.drift.retarget_every = 40;       % nTrialsRetarget; also at trial 1
 cfg.drift.exposure_scale = 2;
+
+% Spontaneous sessions: his 2025 behaviour script ran 10 blocks with a
+% drift correction (and the bleaching update) before each. The block
+% length is from the published analysis (4 blocks = 1,152,000 frames);
+% his block settings are on the external drives and not yet read.
+cfg.spontaneous.n_blocks = 10;
+cfg.spontaneous.block_frames = 288000;   % ~6.1 min at 1.27 ms per frame
+cfg.spontaneous.drift_correction = true;
 
 cfg.bleaching.enabled = true;
 cfg.bleaching.frames = 501:1000;

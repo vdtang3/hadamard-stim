@@ -15,7 +15,8 @@ arguments
     context = []
 end
 summary = struct("run_folder", run_folder, "ok", false, "message", "", ...
-    "recipe_hash", "", "next_trial", [], "first_trial", [], "last_trial", [], ...
+    "recipe_hash", "", "session_mode", "", "next_block", [], "n_blocks", [], ...
+    "n_block_records", 0, "next_trial", [], "first_trial", [], "last_trial", [], ...
     "n_trial_records", 0, "cnt", [], "cnt_had", [], "n_sparse_cells_used", [], ...
     "orange_v", [], "exposure_waveform_ms", [], "b0", [], "b1", [], ...
     "n_corrections", 0, "last_correction", [], "complete", false, ...
@@ -30,14 +31,22 @@ catch err
 end
 summary.ok = true;
 summary.recipe_hash = recipe.recipe_hash;
-summary.first_trial = recipe.config.trials.first;
-summary.last_trial = recipe.config.trials.last;
-summary.next_trial = state.next_trial;
-summary.complete = state.next_trial > recipe.config.trials.last;
-summary.n_trial_records = numel(dir(fullfile(run_folder, "trials", "trial_*.json")));
-summary.cnt = state.cnt;
-summary.cnt_had = state.cnt_had;
-summary.n_sparse_cells_used = nnz(any(state.picked, 2));
+summary.session_mode = hadamard_stim.metadata.session_mode(recipe.config);
+if summary.session_mode == "spontaneous"
+    summary.next_block = state.next_block;
+    summary.n_blocks = recipe.config.spontaneous.n_blocks;
+    summary.complete = state.next_block > summary.n_blocks;
+    summary.n_block_records = numel(dir(fullfile(run_folder, "blocks", "block_*.json")));
+else
+    summary.first_trial = recipe.config.trials.first;
+    summary.last_trial = recipe.config.trials.last;
+    summary.next_trial = state.next_trial;
+    summary.complete = state.next_trial > recipe.config.trials.last;
+    summary.n_trial_records = numel(dir(fullfile(run_folder, "trials", "trial_*.json")));
+    summary.cnt = state.cnt;
+    summary.cnt_had = state.cnt_had;
+    summary.n_sparse_cells_used = nnz(any(state.picked, 2));
+end
 summary.orange_v = state.orange_v;
 summary.exposure_waveform_ms = state.exposure_waveform_ms;
 summary.b0 = state.b0;

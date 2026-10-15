@@ -6,13 +6,14 @@ function save_checkpoint(run_folder, state, recipe_hash)
 %   Only state that changes during the run is kept here; the canonical
 %   cells, references and matrix are the recipe's. The file is written to a
 %   temporary name and moved into place, so a crash mid-write leaves the
-%   previous checkpoint intact.
+%   previous checkpoint intact. A connectivity checkpoint is as it always
+%   was; a spontaneous one (new_spontaneous_state) adds session_mode and
+%   keeps next_block instead of the trial counters.
 checkpoint.kind = "hadamard_stim_checkpoint";
 checkpoint.schema_version = "1.0.0";
 checkpoint.recipe_hash = recipe_hash;
 checkpoint.saved_utc = string(datetime("now", "TimeZone", "UTC", "Format", "yyyy-MM-dd'T'HH:mm:ss'Z'"));
-for name = ["next_trial" "cnt" "cnt_had" "picked" "sparse_pictures" "orange_v" ...
-        "exposure_waveform_ms" "b0" "b1"]
+for name = hadamard_stim.metadata.checkpoint_fields(state)
     checkpoint.(name) = state.(name);
 end
 checkpoint.cells_current = state.cells.current;

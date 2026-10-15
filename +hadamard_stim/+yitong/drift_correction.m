@@ -1,7 +1,8 @@
-function result = drift_correction(hadCur, hadRef, hadZStack, zAll, cell_coord, mask_sequence_rois_ref)
+function result = drift_correction(hadCur, hadRef, hadZStack, zAll, cell_coord, mask_sequence_rois_ref, options)
 %DRIFT_CORRECTION The analysis half of Yitong's square_target_drift_correction_v4.
 %
 %   result = hadamard_stim.yitong.drift_correction(hadCur, hadRef, hadZStack, zAll, cell_coord, rois_ref)
+%   result = hadamard_stim.yitong.drift_correction(..., smooth=false)
 %
 %   hadCur     Hadamard image of the sample now (the drift scan)
 %   hadRef     the reference Hadamard image the cells were found on
@@ -11,9 +12,14 @@ function result = drift_correction(hadCur, hadRef, hadZStack, zAll, cell_coord, 
 %              corrections never accumulate)
 %   rois_ref   {illumination ROIs, stimulation ROIs}, NaN-separated, as
 %              they were when the cells were approved
+%   smooth     true (default): each cell's shift is the mean over cells
+%              within 400 um, as v4 does. false: each cell's own flow, as
+%              square_target_drift_correction_single_v1 (his behaviour
+%              script) does; that is v4's only analysis difference.
 %
 %   result.illum_spots / stim_spots  the shifted spots (cell, 1 x n)
-%   result.cell_shift                [n x 2] smoothed (Vx, Vy) per cell
+%   result.cell_shift                [n x 2] (Vx, Vy) per cell, smoothed
+%                                    unless smooth is false
 %   result.flow_at_cells             [n x 2] mean flow in each cell's box
 %   result.z_drift                   motor units; the protocol moves the
 %                                    stage to (position - z_drift)
@@ -31,6 +37,22 @@ function result = drift_correction(hadCur, hadRef, hadZStack, zAll, cell_coord, 
 %   it returns the shifted spots instead of redrawing them into the DMD
 %   app (the caller rasterises them, as he did with dmd_draw_hidden), and
 %   returns z_drift instead of moving the motor.
+%
+%   smooth=false mirrors his Dragonfly_yq_v1_2026_02_09/Auto Scripts/
+%   square_target_drift_correction_single_v1.m, SHA-256
+%   04a14583bbe5a3ada1dbced0b2d14d592fedff8e42591c26ba07884189a8f8aa:
+%   v4 without the smoothing, the stimulation spots and the blue reset. It
+%   is not in the frozen reference, because adding it would change the
+%   manifest every golden fixture records (notebook, 2026-10-15).
+arguments
+    hadCur
+    hadRef
+    hadZStack
+    zAll
+    cell_coord
+    mask_sequence_rois_ref
+    options.smooth (1, 1) logical = true
+end
 [nrows,ncols] = size(hadRef);
 
 %% correct x-y drift
@@ -77,9 +99,14 @@ end
 rLim = 400/6.5;
 cell_shift = zeros(nCells,2);
 for ii = 1:nCells
-    in = distMat(ii,:)<rLim;
-    Vx_i = mean(Vx(in));
-    Vy_i = mean(Vy(in));
+    if options.smooth
+        in = distMat(ii,:)<rLim;
+        Vx_i = mean(Vx(in));
+        Vy_i = mean(Vy(in));
+    else
+        Vx_i = Vx(ii);
+        Vy_i = Vy(ii);
+    end
     cell_shift(ii,:) = [Vx_i Vy_i];
 
     illumSpot_i = illumSpotRois(spot_rois_idx(ii)-nPts+1:spot_rois_idx(ii)-1,:);

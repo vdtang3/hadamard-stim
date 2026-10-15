@@ -424,6 +424,55 @@ is unchanged, and every existing test uses it.
 **Tests.** `TestControllerSession` adds 3: confirmation and record, a same-calibration resume, and `resolved_utc` ignored. The frontend adds 1: the dialog and the flag sent.
 - **Result:** `run_tests('full')` under the 12 GB cap: 178 passed, 0 failed (peak 4.5 GB, 21 min). Frontend: typecheck clean, 154/154 vitest.
 
+## 2026-10-15: Phase 6, session modes and optional streams
+
+**Scope (Vincent).** The primary goal stays connectivity sessions on Firefly. The secondary goal is spontaneous voltage imaging in his block structure. Face video and the wheel encoder are optional companions, never prerequisites. Excitability (steps + ramp), the 16-cell control, the lattice test, the RFP/GFP stack workflow and the pilot modes are out of scope. The paper-to-code audit (scratchpad `audit/`, 2026-10-15) found that the paper's data is two mice × three sessions (behaviour, sparseOpto, sparsePulseHad). Connectivity is what we ported; spontaneous is his `behavior` session.
+
+**Decisions.**
+- **Encoder:** raw A/B digital lines, recorded through Luminos's generic buffered digital input (`wfm_data.di`) on the acquisition clock. This is the signal he recorded (`DAQ_data` columns 1–2; on 2025-03-08 they toggle ~97 times in a 0.4 s z-plane, so the encoder was live).
+  - The Luminos `Treadmill` device was not used. It decodes on a counter, so it needs A/B on PFI inputs, and on a USB-6343 his port0 lines cannot feed a counter. Its clocked mode keeps every sample in seven double arrays.
+  - The lines are a rig setting (`wheel_encoder_lines`, default his `Dev1/port0/line9`/`line10`) and appear nowhere in protocol code. Nothing decodes them yet.
+- **Continuous blocks:** Firefly runs on his PC (Vincent). His app queued each block's whole waveform (`queueOutputData`, ~102 kHz) and got every input back from `startForeground`: about 4.5 GB per 6-min block.
+  - The package never builds a block's samples. `spontaneous_waveform` describes each row as a constant head, a one-frame (or one Grasshopper-period) unit and a count. Luminos expands each row once into its own DAQ buffer (`luminos.repeated_waveform`).
+  - Preflight states the estimated footprint and refuses only above 80% of free memory (Windows `memory`).
+  - No chunking.
+- **Drift between blocks:** his `square_target_drift_correction_single_v1` is v4 without the neighbourhood smoothing, without the stimulation spots and without the blue reset. It is `yitong.drift_correction(..., smooth=false)` and `protocol.run_drift_correction(..., smooth=false, stim=false)`: one operation for both modes, no second algorithm.
+  - The behaviour script (`RunSynchronizedAQMulti_behavior_NPY_GFP_v1.m`, SHA-256 `1088424a…8da2b`) and `single_v1` (`04a14583…a8f8aa`) are cited by source path and hash, **not frozen**: every golden fixture records the frozen manifest's hash, so adding files would make all fixtures stale, and fixtures are not to be regenerated. Freezing them would come with the next deliberate fixture regeneration.
+- **Block waveform:** the camera, orange, Grasshopper and IR rows of his `dragonflyMultiPatWaveform_2color_periodicPulse_v2_yq` for the same settings, sample for sample (tested at 2600 and 3001 frames, 1.27 and 1.29 ms). There is no blue row and no DMD trigger.
+  - The illumination mask is shown as one static picture (`dmd_show_mask` → Luminos `Write_Static`), as his `current_mask` was.
+  - *Unverified:* which waveform function and frame count his behaviour blocks actually used. Their `.set` files are only on the external drives. The default `block_frames` 288000 comes from the analysis repository.
+- **Streams do not change the protocol.** With the face camera off, `LuminosRig` drives neither `grashopperTrigger` nor `IRVoltage` and leaves the Grasshopper untriggered. The protocol's samples and hashes are unchanged (tested). With the encoder on, every acquisition records it, scans included, as his DAQ did.
+- **Validation follows the mode.**
+  - A behaviour stream that is off is a warning, never a deviation. The recipe records the stream as "disabled in the configuration".
+  - A run's deviations are only the fields its mode uses.
+  - Spontaneous mode does not require `dmd.trigger_edge`.
+- **Preflight follows what is enabled.** The face camera and encoder checks say "disabled" when off. The blue LED, blue calibration, DMD queue and the Firefly checks `trigger_edge`/`queue_support`/`slide_queue` are "not needed" for spontaneous sessions, whose hardware gate is `driver` only. The stage is needed only when the mode's z-stack or drift correction needs it.
+- **Spontaneous blocks behave like his.**
+  - The bleaching update is measured on each block and applied before the next (b0/b1 both from block 1 at block 2, as in his script). It is measured only when it will be applied, so a one-block test can be any length.
+  - A z-stack is needed only with drift correction; without it, approving the cells makes the session ready.
+  - Checkpoints fall at block boundaries. An interrupted block is not recorded and is acquired again, from its drift correction, on resume.
+  - Records go to `blocks/block_NN.json`.
+- **Connectivity is unchanged.** The same trials, waveforms, queues, checkpoint fields and trial records. The recipe gains `session_mode`, `streams` and `warnings`; connectivity checkpoints keep exactly their fields.
+
+**Not done (follow-ups).**
+- RFP/GFP Hadamard z-stacks: his behaviour script's RFP reference stack and closing GFP stack, and the closing GFP stack at the end of the connectivity script we ported. The reference z-stack here is `run_z_reference` with whatever filter is in place.
+- Encoder decoding.
+- Chunking, if Firefly shows a block does not fit.
+
+**Tests.**
+- **Package:** `TestOptionalStreams` (6: preflight in all 8 mode × stream combinations, an unneeded stage, refused encoder lines, a connectivity run with neither stream and with both, and the face-camera switch leaving the samples unchanged). `TestSpontaneousSession` (10: his waveform rows, blocks with drift and bleaching, without drift, a one-block test, abort and resume at a block boundary, small state and records, a full 288,000-frame block through `LuminosRig` and the fake Luminos, the tab path equal to the programmatic one, validation by mode, and what a mode needs before it runs).
+- **Unchanged:** every existing test file, every fixture and the frozen reference.
+- **Frontend:** 2 new vitest tests (mode and stream switches; the spontaneous view).
+- **Result:** `run_tests('full')` under the 12 GB cap: 194 passed, 0 failed (peak 5.3 GB, 23 min; the full 288,000-frame block included). Frontend: typecheck clean, 156/156 vitest, bundle builds. Luminos: device, interrupt and user-config tests pass; 27 rig and 28 user files validate.
+
+**Firefly validation to add** (start with Connectivity, face camera off, encoder off):
+- the encoder's wiring and lines today;
+- that the A/B DI capture records the wheel and is aligned with the camera triggers;
+- the Grasshopper switched on and off;
+- voltage + stimulation + camera + encoder together;
+- a 6-min block's stability and RAM on the rig PC;
+- stage and drift correction between long blocks.
+
 ## Parity issues (behaviour that may be a bug; reproduced, not fixed)
 
 - **P1. Reference-image orientation changed after the experiments.** `hadamard_ref.m` gained a transpose on 2026-02-10, after his 2025 data, alongside a Kinetix MEX change. In the newest snapshot, segmentation would run on the transposed image while drift correction compares untransposed scans with the untransposed `hadamard_ref`. The fixtures follow his 2025-03-08 session, which is the untransposed behaviour he actually ran. In Luminos the reference image, scans and DMD calibration must all share Luminos's camera orientation. **Confirmed 2026-10-13: the port follows the untransposed 2025 behaviour.** The transposed `hadamard_ref.m` stays frozen only as evidence.

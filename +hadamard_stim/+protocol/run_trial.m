@@ -55,7 +55,8 @@ if ~invariants.ok
 end
 spec = hadamard_stim.protocol.acquisition_spec("stimulation", plan.folder, waveform, ...
     trial=iTrial, camera_exposure_ms=cfg.stimulation.camera_exposure_ms, ...
-    c_idx_all_it=plan.c_idx_all_it);
+    c_idx_all_it=plan.c_idx_all_it, ...
+    streams=hadamard_stim.protocol.acquisition_streams(cfg, "stimulation"));
 acq = env.hw.acquire(spec);
 
 % Lines 250-259: b0 from trial 1's movie, b1 from every trial's.

@@ -10,6 +10,7 @@ classdef FakeAlpDmd < hadamard_stim.testing.FakeLuminosDevice
     properties
         Dimensions = [1024 768]        % [width height]
         pattern_stack = []
+        Target = []                    % the single picture Write_Static shows
         auto_write_stack = true
         pattern_owner (1, 1) string = ""
         invert_output = false
@@ -28,7 +29,7 @@ classdef FakeAlpDmd < hadamard_stim.testing.FakeLuminosDevice
         Stack = struct("sha256", "", "size", [0 0 0])
         Queue = []
         QueueSettings = []
-        Displaying = "nothing"         % "stack", "queue" or "dark"
+        Displaying = "nothing"         % "stack", "queue", "static" or "dark"
     end
 
     properties (Access = private)
@@ -99,6 +100,16 @@ classdef FakeAlpDmd < hadamard_stim.testing.FakeLuminosDevice
             obj.sequence_queue = struct([]);
             obj.Queue = [];
             obj.Displaying = "stack";
+        end
+
+        function Write_Static(obj)
+            % Luminos projects Target in master mode, freeing any queue.
+            obj.check("Write_Static");
+            his = permute(logical(obj.Target > .5), [2 1 3]);
+            obj.Stack = struct("sha256", hadamard_stim.metadata.sha256(his), "size", size(his, [1 2 3]));
+            obj.sequence_queue = struct([]);
+            obj.Queue = [];
+            obj.Displaying = "static";
         end
 
         function report = Load_Sequence_Queue(obj, owner, masks, repeats, picture_time_us, trigger_edge)

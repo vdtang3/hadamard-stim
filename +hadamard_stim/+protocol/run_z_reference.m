@@ -38,7 +38,8 @@ for iz = 1:nZ+1
     hw.motor_move_to(zi);
     folder = string(sprintf([char(prefix) 'z%02u_rpt%02i'], [iz iRpt]));
     spec = hadamard_stim.protocol.acquisition_spec("z_stack_plane", folder, waveform, ...
-        camera_exposure_ms=cfg.scan.camera_exposure_ms);
+        camera_exposure_ms=cfg.scan.camera_exposure_ms, ...
+        streams=hadamard_stim.protocol.acquisition_streams(cfg, "z_stack_plane"));
     acquisitions{iz} = hw.acquire(spec);
 end
 hw.motor_move_to(zOrig);

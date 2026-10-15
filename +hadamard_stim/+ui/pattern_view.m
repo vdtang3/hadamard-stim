@@ -26,7 +26,8 @@ switch source
         columns = had_mat;
     case "last_trial"
         record = controller.LastRecord;
-        if isempty(record) || isempty(record.c_idx_all_it)
+        % A spontaneous block stimulates nothing.
+        if isempty(record) || ~isfield(record, "c_idx_all_it") || isempty(record.c_idx_all_it)
             return
         end
         columns = record.c_idx_all_it;

@@ -1,10 +1,13 @@
-function report = hardware_gate(context)
+function report = hardware_gate(context, session_mode)
 %HARDWARE_GATE Whether Firefly has passed the checks a real acquisition needs.
 %
 %   report = hadamard_stim.metadata.hardware_gate(context)
+%   report = hadamard_stim.metadata.hardware_gate(context, session_mode)
 %
-%   A run on real hardware may start only when context.hardware_validation
-%   records all four Firefly checks as passed (docs/notebook.md, Phase 2):
+%   A connectivity run on real hardware may start only when
+%   context.hardware_validation records all four Firefly checks as passed
+%   (docs/notebook.md, Phase 2). A spontaneous run uses no sequence queue
+%   and no triggered DMD, so it needs only the driver check:
 %
 %     driver          which ALP driver and version drives the board, and
 %                     that it is the 1024 x 768 DMD his masks assume
@@ -19,7 +22,11 @@ function report = hardware_gate(context)
 %   never waits on these: they gate acquisition, not the port.
 %
 %   report.ok, report.missing (names), report.validation (as recorded)
-checks = ["driver" "trigger_edge" "queue_support" "slide_queue"];
+arguments
+    context
+    session_mode (1, 1) string = "connectivity"
+end
+checks = hadamard_stim.metadata.hardware_checks(session_mode);
 report.validation = [];
 report.missing = strings(1, 0);
 if isfield(context, "simulated") && context.simulated

@@ -1,8 +1,12 @@
-function file = write_resume_record(run_folder, recipe_hash, next_trial, comparison, continued)
+function file = write_resume_record(run_folder, recipe_hash, position, comparison, continued)
 %WRITE_RESUME_RECORD Write resumes/resume_NNN.json for one resume of a run.
 %
 %   file = hadamard_stim.metadata.write_resume_record(run_folder, recipe_hash, ...
-%       next_trial, comparison, continued)
+%       position, comparison, continued)
+%
+%   position is where the run continues: struct("next_trial", n) for a
+%   connectivity run, struct("next_block", n) for a spontaneous one; its
+%   field is copied into the record as it is.
 %
 %   The recipe is immutable, so what changed when a run was resumed is
 %   recorded beside it: when, at which trial, the recorded and current
@@ -23,7 +27,12 @@ out.kind = "hadamard_stim_resume";
 out.schema_version = "1.0.0";
 out.recipe_hash = recipe_hash;
 out.resumed_utc = string(datetime("now", "TimeZone", "UTC", "Format", "yyyy-MM-dd'T'HH:mm:ss'Z'"));
-out.next_trial = next_trial;
+if isnumeric(position)
+    position = struct("next_trial", position);
+end
+for name = string(fieldnames(position))'
+    out.(name) = position.(name);
+end
 out.calibration_changed = comparison.changed;
 out.continued_with_changed_calibration = continued && comparison.changed;
 out.consequence = comparison.consequence;

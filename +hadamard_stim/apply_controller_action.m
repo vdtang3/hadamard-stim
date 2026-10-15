@@ -28,6 +28,8 @@ function response = apply_controller_action(controller, action, payload, expecte
 %     propose_cells, approve_cells, acquire_z_reference
 %     start_run             payload.run_folder (optional with a backend)
 %     resume_run            payload.run_folder (optional: the session's own)
+%                           payload.continue_with_changed_calibration: resume
+%                           although a calibration changed (recorded)
 %     stop_after_current    finish the trial in progress, then stop
 %     abort                 abandon what the rig is doing; then release it
 %     new_session           start again on a new field of view
@@ -84,7 +86,9 @@ try
         case "start_run"
             controller.startRun(optional_folder(payload));
         case "resume_run"
-            controller.resumeRun(optional_folder(payload));
+            controller.resumeRun(optional_folder(payload), ContinueWithChangedCalibration= ...
+                isfield(payload, "continue_with_changed_calibration") ...
+                && isequal(payload.continue_with_changed_calibration, true));
         case "stop_after_current"
             controller.requestStop();
         case "abort"

@@ -101,6 +101,9 @@ bottom: Preflight (read only, one line per requirement), Prepare rig,
 Take reference scan, Segment, Approve cells, Acquire z-reference, Run.
 Stop after this trial and Abort are honoured while a run is going; a
 stopped, failed or aborted run resumes from its checkpoint (Resume panel).
+If the blue or DMD calibration has changed since the run started, the
+Resume panel shows both and what that means, and resumes only after
+"Continue anyway"; each resume is recorded in the run's `resumes/` folder.
 The rig settings (blue threshold, calibration scan folders, the Firefly
 checks file) can also be set from the tab. The checks file records the
 four Firefly checks as `{"driver": {"passed": true, "evidence": "...",

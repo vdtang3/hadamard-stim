@@ -53,6 +53,7 @@ classdef HadamardStimController < handle
         Activity (1, 1) string = ""   % the long operation in progress, if any
         Phase = []             % which part of the protocol is running (report_phase)
         LastCleanup = []       % the rig's report from the last release
+        LastResume = []        % the last resume's record (write_resume_record)
         RunStarted = NaT
         RunEnded = NaT
     end
@@ -179,6 +180,7 @@ classdef HadamardStimController < handle
             obj.LastError = "";
             obj.LastErrorIdentifier = "";
             obj.LastCleanup = [];
+            obj.LastResume = [];
             obj.RunStarted = NaT;
             obj.RunEnded = NaT;
             obj.LifecycleState = "CONFIGURING";
@@ -214,10 +216,17 @@ classdef HadamardStimController < handle
             obj.run(state);
         end
 
-        function resumeRun(obj, run_folder)
+        function resumeRun(obj, run_folder, options)
+            % Continue a run from its checkpoint. If the blue or DMD
+            % calibration prepared now differs from the one the run
+            % recorded, the resume stops with hadamard_stim:CalibrationChanged
+            % (both identities and the consequence in its message) unless
+            % ContinueWithChangedCalibration is true; the override is
+            % recorded in the run's resumes/ folder.
             arguments
                 obj
                 run_folder (1, 1) string = ""
+                options.ContinueWithChangedCalibration (1, 1) logical = false
             end
             obj.assertIdle(["CONFIGURING" "READY" "STOPPED" "FAILED" "ABORTED"]);
             obj.requireEnvironment();
@@ -230,8 +239,17 @@ classdef HadamardStimController < handle
             obj.assertHardwareValidated();
             [recipe, ~] = hadamard_stim.metadata.read_recipe(run_folder);
             state = hadamard_stim.metadata.load_checkpoint(run_folder);
+            comparison = hadamard_stim.metadata.calibration_comparison(recipe, obj.Env.context);
+            if comparison.changed && ~options.ContinueWithChangedCalibration
+                error("hadamard_stim:CalibrationChanged", "%s", calibration_change_message(comparison));
+            end
             obj.Config = recipe.config;
             session = obj.beginHardware(); %#ok<NASGU>
+            file = hadamard_stim.metadata.write_resume_record(run_folder, recipe.recipe_hash, ...
+                state.next_trial, comparison, options.ContinueWithChangedCalibration);
+            obj.LastResume = struct("record", string(file), "next_trial", state.next_trial, ...
+                "calibration_changed", comparison.changed, ...
+                "continued_with_changed_calibration", comparison.changed && options.ContinueWithChangedCalibration);
             obj.Cells = state.cells.canonical;
             obj.Reference = state.reference;
             obj.RunFolder = run_folder;
@@ -316,6 +334,7 @@ classdef HadamardStimController < handle
             state.last_error = obj.LastError;
             state.last_error_identifier = obj.LastErrorIdentifier;
             state.cleanup = obj.LastCleanup;
+            state.last_resume = obj.LastResume;
             state.backend = struct("available", ~isempty(obj.Backend), "settings", []);
             if ~isempty(obj.Backend)
                 state.backend.settings = obj.Backend.settings();
@@ -700,4 +719,44 @@ t = "";
 if ~isnat(d)
     t = string(datetime(d, "TimeZone", "UTC", "Format", "yyyy-MM-dd'T'HH:mm:ss'Z'"));
 end
+end
+
+function text = calibration_change_message(comparison)
+lines = "The calibrations prepared now differ from the ones this run recorded.";
+for name = ["blue" "geometry"]
+    side = comparison.(name);
+    if isequal(side.matches, false)
+        lines(end+1) = sprintf("%s recorded: %s", name, brief(side.recorded)); %#ok<AGROW>
+        lines(end+1) = sprintf("%s current:  %s", name, brief(side.current)); %#ok<AGROW>
+    end
+end
+lines = [lines, comparison.consequence, ...
+    "To resume anyway, confirm it (resume_run with continue_with_changed_calibration, " + ...
+    "or resumeRun(..., ContinueWithChangedCalibration=true)); the override is recorded in the run folder."];
+text = strjoin(lines, newline);
+end
+
+function text = brief(identity)
+% A calibration identity in one line: the fields that tell two apart.
+if isstring(identity) || ischar(identity)
+    text = string(identity);
+    return
+elseif ~isstruct(identity)
+    text = string(jsonencode(identity));
+    return
+end
+parts = strings(1, 0);
+for name = ["device" "status" "measured_utc" "curve_sha256" "n_points" "blue_threshold" "bin" "roi"]
+    if isfield(identity, name) && ~isempty(identity.(name))
+        v = identity.(name);
+        if name == "curve_sha256"
+            v = extractBefore(string(v) + "            ", 13);
+        end
+        parts(end+1) = name + "=" + string(jsonencode(v)); %#ok<AGROW>
+    end
+end
+if isempty(parts)
+    parts = string(jsonencode(identity));
+end
+text = strjoin(parts, ", ");
 end

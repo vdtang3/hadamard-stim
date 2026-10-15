@@ -169,6 +169,95 @@ classdef TestControllerSession < matlab.unittest.TestCase
             testCase.verifyEqual(trial_records(other), straight);
         end
 
+        function aChangedCalibrationNeedsConfirmingAndIsRecorded(testCase)
+            % Resuming on a different calibration is a warning: it goes
+            % ahead only when confirmed, and the override is recorded.
+            [c, cfg, ref] = testCase.session();
+            cfg.trials.last = 3;
+            testCase.ready(c, cfg, ref);
+            c.StatusChangedFcn = @(ctrl) abort_in(ctrl, 2);
+            c.startRun(testCase.Folder);
+            c.StatusChangedFcn = [];
+            testCase.assertEqual(c.LifecycleState, "ABORTED");
+            c.Env.context.blue_calibration.identity = "blueCal_recalibrated.mat";
+
+            v = hadamard_stim.controller_view(c, "checkpoint").data;
+            testCase.verifyTrue(v.calibration_changed);
+            testCase.verifyEqual(v.calibrations.blue.recorded, "blueCal.mat");
+            testCase.verifyEqual(v.calibrations.blue.current, "blueCal_recalibrated.mat");
+            testCase.verifyTrue(v.calibrations.geometry.matches);
+            testCase.verifyNumElements(v.consequence, 1);
+            testCase.verifySubstring(v.consequence, "blue power");
+
+            % Not confirmed: nothing runs and nothing is written.
+            r = hadamard_stim.apply_controller_action(c, "resume_run", struct(), c.Revision);
+            testCase.verifyEqual(r.status, "failed");
+            testCase.verifyEqual(r.identifier, "hadamard_stim:CalibrationChanged");
+            testCase.verifySubstring(r.message, "recorded: blueCal.mat");
+            testCase.verifySubstring(r.message, "current:  blueCal_recalibrated.mat");
+            testCase.verifyEqual(c.LifecycleState, "ABORTED");
+            testCase.verifyFalse(isfolder(fullfile(testCase.Folder, "resumes")));
+            testCase.verifyNumElements(dir(fullfile(testCase.Folder, "trials", "*.json")), 1);
+
+            % Confirmed: the run continues, and says so beside the recipe.
+            r = hadamard_stim.apply_controller_action(c, "resume_run", ...
+                struct("continue_with_changed_calibration", true), c.Revision);
+            testCase.verifyTrue(r.ok, r.message);
+            testCase.verifyEqual(c.LifecycleState, "COMPLETED");
+            testCase.verifyTrue(r.state.last_resume.continued_with_changed_calibration);
+            record = jsondecode(fileread(fullfile(testCase.Folder, "resumes", "resume_001.json")));
+            testCase.verifyEqual(record.kind, 'hadamard_stim_resume');
+            testCase.verifyEqual(record.recipe_hash, char(c.RecipeHash));
+            testCase.verifyEqual(record.next_trial, 2);
+            testCase.verifyTrue(record.calibration_changed);
+            testCase.verifyTrue(record.continued_with_changed_calibration);
+            testCase.verifyEqual(record.calibrations.blue.recorded, 'blueCal.mat');
+            testCase.verifyEqual(record.calibrations.blue.current, 'blueCal_recalibrated.mat');
+            testCase.verifyNotEmpty(record.consequence);
+            % The recipe is untouched: it still records the original.
+            recipe = hadamard_stim.metadata.read_recipe(testCase.Folder);
+            testCase.verifyEqual(recipe.calibrations.blue, "blueCal.mat");
+        end
+
+        function aResumeOnTheSameCalibrationIsRecordedToo(testCase)
+            [c, cfg, ref] = testCase.session();
+            cfg.trials.last = 2;
+            testCase.ready(c, cfg, ref);
+            c.StatusChangedFcn = @(ctrl) abort_in(ctrl, 2);
+            c.startRun(testCase.Folder);
+            c.StatusChangedFcn = [];
+            % Asking to continue changes nothing when nothing changed.
+            c.resumeRun(testCase.Folder, ContinueWithChangedCalibration=true);
+            testCase.verifyEqual(c.LifecycleState, "COMPLETED");
+            record = jsondecode(fileread(fullfile(testCase.Folder, "resumes", "resume_001.json")));
+            testCase.verifyFalse(record.calibration_changed);
+            testCase.verifyFalse(record.continued_with_changed_calibration);
+            testCase.verifyTrue(record.calibrations.blue.matches);
+            testCase.verifyEmpty(record.consequence);
+        end
+
+        function whenACalibrationWasLookedUpIsNotAChange(testCase)
+            blue = struct("device", "Blue_LED", "curve_sha256", "abc", "resolved_utc", "2026-10-14T10:00:00Z");
+            geometry = struct("status", "pair", "measured_utc", "2026-10-01T09:00:00Z");
+            recipe.calibrations = struct("blue", blue, "geometry", geometry);
+            later = blue;
+            later.resolved_utc = "2026-10-15T08:00:00Z";
+            context = struct("blue_calibration", struct("identity", later), "geometry_identity", geometry);
+            comparison = hadamard_stim.metadata.calibration_comparison(recipe, context);
+            testCase.verifyFalse(comparison.changed);
+            testCase.verifyTrue(comparison.blue.matches);
+            % A remeasured DMD calibration is a change.
+            context.geometry_identity.measured_utc = "2026-10-15T07:00:00Z";
+            comparison = hadamard_stim.metadata.calibration_comparison(recipe, context);
+            testCase.verifyTrue(comparison.changed);
+            testCase.verifyFalse(comparison.geometry.matches);
+            testCase.verifySubstring(comparison.consequence, "DMD");
+            % Nothing prepared: nothing to compare.
+            comparison = hadamard_stim.metadata.calibration_comparison(recipe, []);
+            testCase.verifyFalse(comparison.changed);
+            testCase.verifyEmpty(comparison.blue.matches);
+        end
+
         function errorsReachTheState(testCase)
             [c, cfg, ref] = testCase.session();
             cfg.trials.last = 3;

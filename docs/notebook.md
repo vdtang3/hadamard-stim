@@ -395,7 +395,7 @@ is unchanged, and every existing test uses it.
 
 **Decisions.**
 - **Changing rig settings, or preparing, drops the proposal.** The DMD masks were drawn with the old geometry, so both are allowed only before the cells are approved.
-- **Resume uses the checkpoint only.** If the prepared calibration differs from the one the run recorded, the checkpoint view flags it but does not refuse. *Open:* whether resume should refuse instead.
+- **Resume uses the checkpoint only.** A calibration that differs from the one the run recorded is handled as described in the next entry.
 - **The default run folder** is `<Luminos data folder>/<HHmmss>_<prefix>_hadamard_stim`. The Resume panel lists run folders under the user's dated data folders.
 
 **Tests.**
@@ -407,6 +407,22 @@ is unchanged, and every existing test uses it.
 **Still needs Firefly**, now through the tab: the Phase 2 and Phase 4 lists, plus:
 - the reference scan's pattern area;
 - the tab's Abort during a real acquisition (`app.abortAcquisition` from the wait loop).
+
+## 2026-10-15: resuming on a changed calibration
+
+**Decision (Vincent).** A calibration that changed since a run started is a warning, not a refusal. Hard refusals are kept for cases where the experiment cannot run correctly or safely; a resume on a recalibrated rig can still run.
+
+**Behaviour.**
+- `metadata.calibration_comparison` compares the blue and DMD calibration identities in the run's recipe with the prepared ones. The blue identity's `resolved_utc` (when Luminos was asked) is not part of the calibration and is not compared.
+- `resumeRun` stops with `hadamard_stim:CalibrationChanged` unless `ContinueWithChangedCalibration=true` (`continue_with_changed_calibration` in `resume_run`'s payload). The message gives both identities and the consequence. Nothing is run or written before the confirmation.
+- The consequences, as stated to the operator:
+  - **blue:** the resumed trials convert intensity to voltage with the current curve, so the same requested intensity may give a different power than in the trials already recorded;
+  - **DMD:** the checkpoint's illumination masks were drawn with the recorded calibration, while stimulation spots (and later drift-correction masks) use the current one.
+- Every resume writes `resumes/resume_NNN.json` beside the recipe: the time, the next trial, recorded and current identities, the consequences, and whether the run was continued on changed calibrations by an override. The recipe stays immutable, and trial records are unchanged.
+- The tab's Resume panel shows both identities and the consequence. Resume is enabled only after "Continue anyway" is ticked.
+
+**Tests.** `TestControllerSession` adds 3: confirmation and record, a same-calibration resume, and `resolved_utc` ignored. The frontend adds 1: the dialog and the flag sent.
+- **Result:** `run_tests('full')` under the 12 GB cap: 178 passed, 0 failed (peak 4.5 GB, 21 min). Frontend: typecheck clean, 154/154 vitest.
 
 ## Parity issues (behaviour that may be a bug; reproduced, not fixed)
 

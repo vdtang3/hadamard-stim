@@ -24,9 +24,22 @@ function methods_ = backend_interface()
 %     folder = default_run_folder(cfg)
 %     runs = run_folders()         run folders that can be resumed
 %                                  (folder, name, modified)
+%     hw = calibration_hardware(cfg)
+%                                  hardware (hardware_interface) begun for
+%                                  his Hadamard calibration scans only; it
+%                                  needs no environment. The caller runs
+%                                  protocol.acquire_calibration_scans on it
+%                                  and releases it
+%     r = calibrate_blue_led()     the rig's own slide calibration of the
+%                                  blue light; the rig keeps it, and the
+%                                  environment reads it from there
+%     r = record_calibration_scans(cfg, acquisitions)
+%                                  record them; r.folders become the scan
+%                                  calibration
 %
 %   Nothing here runs the experiment: every protocol step still goes
 %   through the environment's hardware (hadamard_stim.protocol.hardware_interface).
 methods_ = ["settings" "set_settings" "preflight" "environment" "diagnostics" ...
-    "default_run_folder" "run_folders"];
+    "default_run_folder" "run_folders" "calibration_hardware" "record_calibration_scans" ...
+    "calibrate_blue_led"];
 end

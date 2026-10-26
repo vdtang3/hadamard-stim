@@ -23,12 +23,14 @@ classdef LuminosBackend < handle
     %     wheel_encoder_lines       the encoder's A and B digital lines;
     %                               empty means his wiring (firefly_profile)
     %
-    %   Options for tests: calibration_movies, acquisition_function, profile.
+    %   Options for tests: calibration_movies, acquisition_function,
+    %   blue_calibration_function, profile.
 
     properties (SetAccess = private)
         App
         Settings struct
         Options struct
+        LastCalibrationScans = []   % what the last calibration scans took
     end
 
     methods
@@ -42,6 +44,8 @@ classdef LuminosBackend < handle
                 options.wheel_encoder_lines string = strings(1, 0)
                 options.calibration_movies cell = {}
                 options.acquisition_function = @Waveform_Camera_Sync_Acquisition
+                % Luminos's slide calibration of a modulator; tests substitute a fake.
+                options.blue_calibration_function = @Calibrate_Modulator_On_Slide
                 options.profile struct = hadamard_stim.luminos.firefly_profile()
             end
             obj.App = app;
@@ -168,6 +172,59 @@ classdef LuminosBackend < handle
             report.calibration = obj.blueCalibrationStatus();
         end
 
+        function result = calibrate_blue_led(obj)
+            % Luminos's slide calibration of the blue LED against the
+            % imaging camera (Calibrate_Modulator_On_Slide: Yitong's method,
+            % camera counts above the LED-off level). Luminos records and
+            % saves it on the modulator, where active_blue_calibration reads
+            % it; nothing is kept here. The slide must be in place and the
+            % camera set as the experiment will use it.
+            profile = obj.Options.profile;
+            if isequal(read(obj.App, "acquisition_active", false), true)
+                error("hadamard_stim:LuminosBusy", "Luminos is acquiring; wait for it to finish.");
+            end
+            result = obj.Options.blue_calibration_function(obj.App, ...
+                profile.devices.blue_modulator.name, camera=profile.devices.camera.name);
+        end
+
+        function hw = calibration_hardware(obj, cfg)
+            % A LuminosRig ready for the Hadamard calibration scans
+            % (protocol.acquire_calibration_scans): begun with only what
+            % they use (DAQ, DMD, imaging camera), so nothing here needs a
+            % prepared environment, because preparing needs these scans.
+            % The caller releases it.
+            hw = hadamard_stim.luminos.LuminosRig(obj.App, profile=obj.Options.profile, ...
+                acquisition_function=obj.Options.acquisition_function);
+            report = hw.begin(cfg, "calibration_scan");
+            if ~report.ok
+                hw.release();
+                error("hadamard_stim:HardwareNotReady", ...
+                    "The rig cannot take the calibration scans:\n  %s", ...
+                    strjoin(report.failures, newline + "  "));
+            end
+        end
+
+        function record = record_calibration_scans(obj, cfg, acquisitions)
+            % Each folder gets a hadamard_calibration_scan.json (settings,
+            % camera area, DMD, time), and the folders become the
+            % calibration_folders setting.
+            [devices, ~] = hadamard_stim.luminos.resolve_hardware(obj.App, obj.Options.profile);
+            record = struct("kind", "hadamard_stim_calibration_scan", "schema_version", "1.0.0", ...
+                "taken_utc", string(datetime("now", "TimeZone", "UTC", "Format", "yyyy-MM-dd'T'HH:mm:ss'Z'")), ...
+                "settings", cfg.calibration_scan, "m_q", cfg.scan.m_q, ...
+                "camera", struct("name", string(devices.camera.name), ...
+                    "roi", devices.camera.getROIForAcquisition(), "bin", double(devices.camera.bin)), ...
+                "dmd", string(devices.dmd.name), ...
+                "folders", reshape([acquisitions.luminos_folder], 1, []), ...
+                "waveform_sha256", acquisitions(1).waveform_sha256);
+            for folder = record.folders
+                writelines(hadamard_stim.metadata.canonical_json(record), ...
+                    fullfile(folder, "hadamard_calibration_scan.json"));
+            end
+            obj.set_settings(struct("calibration_folders", record.folders));
+            obj.LastCalibrationScans = record;
+        end
+
         function env = environment(obj, cfg)
             [validation, ~] = obj.hardwareValidation();
             env = hadamard_stim.luminos.make_environment(obj.App, cfg, ...
@@ -239,7 +296,34 @@ classdef LuminosBackend < handle
             if ~isempty(missing)
                 ok = false;
                 message = "These calibration folders do not exist: " + strjoin(missing, ", ") + ".";
+                return
             end
+            % Scans taken by acquire_calibration_scans say at which camera
+            % area; reconstruction centre-crops the calibration to each
+            % scan, so another area or binning would reconstruct wrongly.
+            [devices, ~] = hadamard_stim.luminos.resolve_hardware(obj.App, obj.Options.profile);
+            camera = devices.camera;
+            if isempty(camera)
+                return
+            end
+            roi = camera.getROIForAcquisition();
+            for folder = folders(:)'
+                file = fullfile(folder, "hadamard_calibration_scan.json");
+                if ~isfile(file)
+                    continue
+                end
+                taken = jsondecode(fileread(file));
+                if ~isequal(reshape(taken.camera.roi, 1, []), reshape(double(roi), 1, [])) ...
+                        || taken.camera.bin ~= double(camera.bin)
+                    ok = false;
+                    message = sprintf(['The calibration scans in %s were taken at camera area %s, bin %g; ' ...
+                        'the camera is now at %s, bin %g. Take the calibration scans again at this area.'], ...
+                        folder, mat2str(reshape(taken.camera.roi, 1, [])), taken.camera.bin, ...
+                        mat2str(reshape(double(roi), 1, [])), double(camera.bin));
+                    return
+                end
+            end
+            message = sprintf("%d folder(s).", numel(folders));
         end
 
         function [validation, message] = hardwareValidation(obj)

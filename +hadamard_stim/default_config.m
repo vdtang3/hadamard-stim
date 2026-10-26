@@ -85,6 +85,19 @@ cfg.scan.camera_exposure_ms = 2.5;   % z-stack; drift scans use 2 x the stimulat
 cfg.scan.waveform_period_ms = 2.52;
 cfg.scan.orange_v = 0.47;            % hadOrangeV, also the z-stack's orange
 
+% The Hadamard calibration scans ("had_cal"), on a uniform slide before the
+% session: his 2025-03-08 recordings had_cal_1x_arch_1..3 (RCaMPtopatch.set):
+% static Hadamard waveform, one pass of the 64 patterns, 10 ms exposure on
+% an 11 ms period, orange 0.1 V, blue off. He recorded them at a centred
+% 512 x 512 area; here they are taken at the experiment's own camera area,
+% which his reconstruction centre-crops to anyway.
+cfg.calibration_scan.n_recordings = 3;
+cfg.calibration_scan.camera_exposure_ms = 10;
+cfg.calibration_scan.waveform_period_ms = 11;
+cfg.calibration_scan.orange_v = 0.1;
+cfg.calibration_scan.repeats = 1;
+cfg.calibration_scan.label = "arch";
+
 cfg.z_reference.enabled = true;
 cfg.z_reference.half_range = 0.030;  % motor units either side of the focus
 cfg.z_reference.n_steps = 20;        % 21 planes

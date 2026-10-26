@@ -13,8 +13,9 @@ classdef HadamardStimController < handle
     %   preflight and diagnostics before then.
     %
     %   The session follows his order of work, one step at a time:
-    %     CONFIGURING      edit the configuration; prepare the rig; take or
-    %                      set the reference image
+    %     CONFIGURING      edit the configuration; take the Hadamard
+    %                      calibration scans on a slide; prepare the rig;
+    %                      take or set the reference image
     %     CELLS_PROPOSED   segmentation run on the reference image; look at
     %                      the cells and min_val, then approve or re-run
     %     CELLS_APPROVED   the canonical geometry is fixed from here on
@@ -77,6 +78,7 @@ classdef HadamardStimController < handle
 
     properties (Access = private)
         HardwareHeld (1, 1) logical = false
+        CalibrationHw = []     % the rig a calibration scan is using, for abort
     end
 
     methods
@@ -133,6 +135,25 @@ classdef HadamardStimController < handle
             obj.requireBackend();
             obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED"]);
             obj.during("preparing", @() obj.prepareBody());
+        end
+
+        function acquireCalibrationScans(obj)
+            % His Hadamard calibration scans, on the slide now in place,
+            % before the rig is prepared (preparing needs them). The new
+            % scans become the backend's calibration folders, so a rig
+            % prepared with the old ones is dropped, with any proposal.
+            obj.requireBackend();
+            obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED"]);
+            obj.during("calibrating", @() obj.calibrationBody());
+        end
+
+        function calibrateBlueLed(obj)
+            % The rig's slide calibration of the blue light, with the
+            % uniform slide in place. The calibration changes, so a rig
+            % prepared with the old one is dropped, with any proposal.
+            obj.requireBackend();
+            obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED"]);
+            obj.during("calibrating_blue", @() obj.blueCalibrationBody());
         end
 
         function acquireReferenceImage(obj)
@@ -289,12 +310,17 @@ classdef HadamardStimController < handle
         function requestAbort(obj)
             % Abandon what the rig is doing now. The trial in progress is not
             % recorded, so a resume repeats it from the last checkpoint.
-            if ~ismember(obj.Activity, ["running" "z_reference" "scanning"])
+            if ~ismember(obj.Activity, ["running" "z_reference" "scanning" "calibrating"])
                 error("hadamard_stim:NotRunning", "Nothing is running on the rig.");
             end
             obj.AbortRequested = true;
             obj.StopRequested = true;
-            obj.Env.hw.abort();
+            if obj.hasEnvironment()
+                obj.Env.hw.abort();
+            end
+            if obj.Activity == "calibrating" && ~isempty(obj.CalibrationHw)
+                obj.CalibrationHw.abort();
+            end
             obj.bump();
             obj.notifyStatus();
         end
@@ -379,6 +405,12 @@ classdef HadamardStimController < handle
                 state.backend.settings = obj.Backend.settings();
             end
             state.environment = obj.environmentSummary();
+            state.calibration_scans = [];
+            if ~isempty(obj.Backend) && ~isempty(obj.Backend.LastCalibrationScans)
+                r = obj.Backend.LastCalibrationScans;
+                state.calibration_scans = struct("taken_utc", r.taken_utc, ...
+                    "folders", r.folders, "camera_roi", r.camera.roi, "label", r.settings.label);
+            end
             state.preflight = obj.Preflight;
             state.calibration = obj.calibrationStatus();
         end
@@ -395,6 +427,8 @@ classdef HadamardStimController < handle
             legal.set_rig_settings = backend && early;
             legal.run_preflight = backend && idle;
             legal.prepare_rig = backend && early;
+            legal.acquire_calibration_scans = backend && early;
+            legal.calibrate_blue_led = backend && early;
             legal.acquire_reference_image = env && early;
             legal.set_reference_image = early;
             legal.propose_cells = early && env && ~isempty(obj.ReferenceImage);
@@ -403,7 +437,7 @@ classdef HadamardStimController < handle
             legal.start_run = idle && s == "READY" && obj.hasZStackFor(obj.Config);
             legal.resume_run = idle && env && ismember(s, ["CONFIGURING" "READY" "STOPPED" "FAILED" "ABORTED"]);
             legal.stop_after_current = s == "RUNNING" && ~obj.StopRequested;
-            legal.abort = ismember(obj.Activity, ["running" "z_reference" "scanning"]) && ~obj.AbortRequested;
+            legal.abort = ismember(obj.Activity, ["running" "z_reference" "scanning" "calibrating"]) && ~obj.AbortRequested;
             legal.new_session = idle && ~ismember(s, ["CONFIGURING" "RUNNING"]);
         end
 
@@ -540,6 +574,37 @@ classdef HadamardStimController < handle
             obj.Preflight = struct("ok", isempty(failed), "checked_utc", utc_text(datetime("now", "TimeZone", "UTC")), ...
                 "config_sha256", hadamard_stim.metadata.sha256(unicode2native(jsonencode(obj.Config), "UTF-8")), ...
                 "checks", checks, "calibration", report.calibration);
+        end
+
+        function calibrationBody(obj)
+            hw = obj.Backend.calibration_hardware(obj.Config);
+            obj.CalibrationHw = hw;
+            release = onCleanup(@() obj.releaseCalibrationHw(hw)); %#ok<NASGU>
+            env = struct("hw", hw, "phase_changed", @(phase) obj.onPhase(phase));
+            acquisitions = hadamard_stim.protocol.acquire_calibration_scans(obj.Config, env);
+            obj.Backend.record_calibration_scans(obj.Config, acquisitions);
+            obj.Env = struct();
+            obj.Prepared = [];
+            obj.Preflight = [];
+            obj.Proposal = [];
+            obj.LifecycleState = "CONFIGURING";
+        end
+
+        function blueCalibrationBody(obj)
+            obj.Backend.calibrate_blue_led();
+            obj.Env = struct();
+            obj.Prepared = [];
+            obj.Preflight = [];
+            obj.Proposal = [];
+            obj.LifecycleState = "CONFIGURING";
+        end
+
+        function releaseCalibrationHw(obj, hw)
+            obj.CalibrationHw = [];
+            report = hw.release();
+            obj.LastCleanup = struct("ok", report.ok, "released_utc", utc_text(datetime("now", "TimeZone", "UTC")), ...
+                "steps", reshape(string(report.steps), [], 1), ...
+                "errors", reshape(string(report.errors), [], 1));
         end
 
         function prepareBody(obj)

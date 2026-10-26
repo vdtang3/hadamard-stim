@@ -78,11 +78,18 @@ classdef LuminosRig < handle
 
         % ---- Session ----------------------------------------------------
 
-        function report = begin(obj, cfg)
+        function report = begin(obj, cfg, purpose)
+            % purpose "calibration_scan" checks only what the calibration
+            % scans use (preflight); a run's begin is begin(cfg).
+            arguments
+                obj
+                cfg struct
+                purpose (1, 1) string = "run"
+            end
             obj.AbortRequested = false;
             report = hadamard_stim.luminos.preflight(obj.App, cfg, ...
                 blue_threshold=obj.Options.blue_threshold, profile=obj.Profile, ...
-                wheel_encoder_lines=obj.Options.wheel_encoder_lines);
+                wheel_encoder_lines=obj.Options.wheel_encoder_lines, purpose=purpose);
             if ~report.ok
                 return
             end

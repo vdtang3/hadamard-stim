@@ -9,9 +9,11 @@ function calibration = active_blue_calibration(modulator, blue_threshold)
 %                   calibration's power units) are dropped; required, no
 %                   default (parity issue P2, below)
 %
-%   Luminos's calibration of a modulator is its iscalibrated flag and
-%   calibration_curve, [volts; power] as Calibrate_DAQ_Modulator writes it.
-%   That is the only source: there is no Hadamard calibration store, and
+%   Luminos's calibration of a modulator is its calibration_curve,
+%   [command; output], together with either calibration_info (recorded by
+%   Set_Calibration, e.g. Calibrate_Modulator_On_Slide: camera counts on a
+%   uniform slide, Yitong's own method) or the iscalibrated flag. Luminos
+%   keeps and saves it; there is no Hadamard calibration store, and
 %   Yitong's blueCal.mat is used only by the parity tests. Refuses when the
 %   modulator has no usable calibration.
 %
@@ -39,11 +41,16 @@ if isempty(blue_threshold) || ~isscalar(blue_threshold) || ~isfinite(blue_thresh
          'calibration; choose the equivalent power level in that calibration''s ' ...
          'units and pass it (it is recorded as a deviation).'], name);
 end
-if ~isequal(modulator.iscalibrated, true) || isempty(modulator.calibration_curve)
+info = [];
+if isprop(modulator, "calibration_info") || (isstruct(modulator) && isfield(modulator, "calibration_info"))
+    info = modulator.calibration_info;
+end
+recorded = isstruct(info) && ~isempty(info);
+if isempty(modulator.calibration_curve) || ~(recorded || isequal(modulator.iscalibrated, true))
     error("hadamard_stim:NoBlueCalibration", ...
-        ['%s has no active calibration in Luminos. Calibrate it ' ...
-         '(Calibrate_DAQ_Modulator with a power meter) so that iscalibrated is true ' ...
-         'and calibration_curve holds [volts; power], then start again.'], name);
+        ['%s has no active calibration in Luminos. With a uniform slide under the objective, ' ...
+         'use Calibrate blue LED (slide) in the Hadamard Stim tab, or ' ...
+         'Calibrate_Modulator_On_Slide(app, "%s", camera=...), then start again.'], name, name);
 end
 curve = double(modulator.calibration_curve);
 v = curve(1, :);
@@ -92,5 +99,19 @@ calibration.identity = struct("source", calibration.source, "device", name, ...
     "curve_sha256", hadamard_stim.metadata.sha256(curve), "n_points", size(curve, 2), ...
     "volts_range", [v(1) v(end)], "blue_threshold", blue_threshold, ...
     "threshold_translation", "blue_intens_c = power * 15 / blue_threshold (P2)", ...
+    "recorded", "not recorded (iscalibrated set by hand)", ...
     "resolved_utc", calibration.utc);
+if recorded
+    calibration.identity.recorded = struct("method", string(field_or(info, "method")), ...
+        "units", string(field_or(info, "units")), ...
+        "measured_utc", string(field_or(info, "measured_utc")), ...
+        "camera", string(field_or(info, "camera")));
+end
+end
+
+function v = field_or(s, name)
+v = "";
+if isfield(s, name) && ~isempty(s.(name))
+    v = s.(name);
+end
 end

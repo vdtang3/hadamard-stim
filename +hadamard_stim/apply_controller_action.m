@@ -22,6 +22,8 @@ function response = apply_controller_action(controller, action, payload, expecte
 %                           fields hadamard_stim.ui.config_fields lists
 %     set_rig_settings      payload.settings (backend settings to change)
 %     run_preflight         read-only rig checks
+%     acquire_calibration_scans   his Hadamard calibration scans, on a slide
+%     calibrate_blue_led    the rig's slide calibration of the blue light
 %     prepare_rig           build the environment from the backend
 %     acquire_reference_image   one Hadamard scan, reconstructed
 %     set_reference_image   payload.image
@@ -39,7 +41,8 @@ arguments
     payload struct = struct()
     expected_revision = []
 end
-known = ["set_config" "update_config" "set_rig_settings" "run_preflight" "prepare_rig" ...
+known = ["set_config" "update_config" "set_rig_settings" "run_preflight" ...
+    "acquire_calibration_scans" "calibrate_blue_led" "prepare_rig" ...
     "acquire_reference_image" "set_reference_image" "propose_cells" "approve_cells" ...
     "acquire_z_reference" "start_run" "resume_run" "stop_after_current" "abort" "new_session"];
 if ~ismember(action, known)
@@ -71,6 +74,10 @@ try
             controller.setRigSettings(payload.settings);
         case "run_preflight"
             controller.runPreflight();
+        case "acquire_calibration_scans"
+            controller.acquireCalibrationScans();
+        case "calibrate_blue_led"
+            controller.calibrateBlueLed();
         case "prepare_rig"
             controller.prepareRig();
         case "acquire_reference_image"

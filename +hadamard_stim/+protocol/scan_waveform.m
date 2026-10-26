@@ -1,7 +1,8 @@
-function waveform = scan_waveform(cfg, period_ms, orange_v, n_pat)
+function waveform = scan_waveform(cfg, period_ms, orange_v, n_pat, repeats)
 %SCAN_WAVEFORM DAQ samples for a Hadamard scan (z-stack plane or drift scan).
 %
 %   waveform = hadamard_stim.protocol.scan_waveform(cfg, period_ms, orange_v, n_pat)
+%   waveform = scan_waveform(..., repeats)   default cfg.scan.repeats
 %
 %   His dragonflyStaticHadamardWaveform_yq with blue off: one camera frame
 %   per DMD pattern, n_pat patterns repeated cfg.scan.repeats times, the
@@ -10,7 +11,10 @@ p.daq_rate = cfg.daq.rate;
 p.channels = cfg.daq.channels;
 p.exposure_ms = period_ms;
 p.n_pat = n_pat;
-p.repeat = cfg.scan.repeats;
+if nargin < 5
+    repeats = cfg.scan.repeats;
+end
+p.repeat = repeats;
 p.n_rows = cfg.camera.rows;
 p.orange_v = orange_v;
 p.blue_v = 0;

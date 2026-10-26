@@ -2,7 +2,7 @@ function report = preflight(app, cfg, options)
 %PREFLIGHT Whether this rig can run cfg, checked without changing anything.
 %
 %   report = hadamard_stim.luminos.preflight(app, cfg, blue_threshold=..., ...
-%       profile=..., wheel_encoder_lines=...)
+%       profile=..., wheel_encoder_lines=..., purpose=...)
 %
 %   report.ok        no failures
 %   report.failures  one sentence per problem, saying what to do about it
@@ -18,6 +18,10 @@ function report = preflight(app, cfg, options)
 %   camera and the wheel encoder only when enabled; when not, their checks
 %   say "disabled" and nothing about them is read.
 %
+%   purpose "calibration_scan" (acquire_calibration_scans, on a slide)
+%   needs only the DAQ, the DMD and the imaging camera: no stage, no blue
+%   LED, no DMD calibration (the scan covers the whole DMD), no streams.
+%
 %   Nothing is written to any device, and the protocol state is not
 %   touched: every check reads a property or calls an inquiry method.
 %   LuminosRig.begin runs it before any hardware is used.
@@ -27,15 +31,18 @@ arguments
     options.blue_threshold = []
     options.profile struct = hadamard_stim.luminos.firefly_profile()
     options.wheel_encoder_lines string = strings(1, 0)
+    options.purpose (1, 1) string {mustBeMember(options.purpose, ["run" "calibration_scan"])} = "run"
 end
 profile = options.profile;
+calibrating = options.purpose == "calibration_scan";
 lines = options.wheel_encoder_lines;
 if isempty(lines)
     lines = profile.wheel_encoder.lines;
 end
 spontaneous = hadamard_stim.metadata.session_mode(cfg) == "spontaneous";
-face_camera = ~isfield(cfg, "behavior") || isequal(cfg.behavior.face_camera_enabled, true);
-encoder = isfield(cfg, "behavior") && isequal(cfg.behavior.wheel_encoder_enabled, true);
+face_camera = ~calibrating && (~isfield(cfg, "behavior") || isequal(cfg.behavior.face_camera_enabled, true));
+encoder = ~calibrating && isfield(cfg, "behavior") && isequal(cfg.behavior.wheel_encoder_enabled, true);
+no_blue = spontaneous || calibrating;
 failures = strings(0, 1);
 checks = struct("id", {}, "label", {}, "status", {}, "message", {});
 current = 0;
@@ -62,7 +69,10 @@ end
 
 % The devices this configuration needs.
 [devices, missing] = hadamard_stim.luminos.resolve_hardware(app, profile);
-if spontaneous
+if calibrating
+    needs_stage = false;
+    stage_reason = "Not needed: calibration scans do not move the stage.";
+elseif spontaneous
     needs_stage = isequal(cfg.spontaneous.drift_correction, true);
     stage_reason = "Not needed: drift correction between blocks is off.";
 else
@@ -74,11 +84,14 @@ for role = string(fieldnames(profile.devices))'
     if role == "behavior_camera" && ~face_camera
         checks(current).status = "disabled";
         checks(current).message = "The face camera is off in the configuration.";
+        if calibrating
+            checks(current).message = "Not recorded during calibration scans.";
+        end
         continue
     end
-    if role == "blue_modulator" && spontaneous
+    if role == "blue_modulator" && no_blue
         checks(current).status = "not_needed";
-        checks(current).message = "Not needed: a spontaneous session uses no blue light.";
+        checks(current).message = "Not needed: no blue light is used.";
         continue
     end
     for m = missing(string([missing.role]) == role)
@@ -95,9 +108,9 @@ end
 dmd = devices.dmd;
 if ~isempty(dmd)
     requirement("dmd_queue", "The DMD supports the sequence queue");
-    if spontaneous
+    if spontaneous || calibrating
         checks(current).status = "not_needed";
-        checks(current).message = "Not needed: spontaneous blocks show one static mask.";
+        checks(current).message = "Not needed: no stimulation queue is loaded.";
     elseif ~call(@() dmd.Supports_Sequence_Queue(), false)
         fail("%s does not report sequence-queue support (Supports_Sequence_Queue), which his stimulation trials need.", dmd.name);
     end
@@ -175,7 +188,7 @@ end
 
 % A spontaneous block is one long acquisition; Luminos holds every driven
 % row and recorded line for its whole length while it runs.
-if spontaneous
+if spontaneous && ~calibrating
     requirement("block_memory", "One spontaneous block fits in memory");
     [need, detail] = hadamard_stim.luminos.block_memory(cfg, face_camera, encoder);
     available = available_memory();
@@ -202,7 +215,7 @@ if ~isempty(camera)
 end
 
 % Calibrations: the active ones, as a run would resolve them.
-if ~isempty(devices.blue_modulator) && ~spontaneous
+if ~isempty(devices.blue_modulator) && ~no_blue
     requirement("blue_calibration", "The active blue calibration is valid");
     try
         hadamard_stim.luminos.active_blue_calibration(devices.blue_modulator, options.blue_threshold);
@@ -210,7 +223,7 @@ if ~isempty(devices.blue_modulator) && ~spontaneous
         fail("%s", err.message);
     end
 end
-if ~isempty(dmd) && ~isempty(camera)
+if ~isempty(dmd) && ~isempty(camera) && ~calibrating
     requirement("dmd_calibration", "The DMD calibration for " + camera.name + " is valid");
     try
         hadamard_stim.luminos.active_geometry(dmd, camera);

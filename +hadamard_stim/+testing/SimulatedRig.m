@@ -97,7 +97,7 @@ classdef SimulatedRig < handle
                     obj.n_drift_scans = obj.n_drift_scans + 1;
                     acq.drift_scan_number = obj.n_drift_scans;
                     acq.stim_index = NaN;
-                case {"z_stack_plane" "reference_scan"}
+                case {"z_stack_plane" "reference_scan" "calibration_scan"}
                     acq.drift_scan_number = NaN;
                     acq.stim_index = NaN;
                 case "stimulation"

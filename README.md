@@ -38,8 +38,9 @@ Phases 1 to 6 are complete off-rig.
 
 Real acquisition still needs:
 - the Firefly hardware checks listed in `docs/notebook.md`;
-- an active Luminos calibration of the blue modulator (none exists yet; a
-  spontaneous session does not need it).
+- a Luminos calibration of the blue LED, taken on the slide from the tab
+  (a spontaneous session does not need it), and a `blue_threshold` in its
+  camera counts.
 
 Next is validation on Firefly, carried out through the tab, starting with a
 connectivity session with the face camera and wheel encoder off.
@@ -110,8 +111,11 @@ Firefly (Luminos `src/Users/Vincent.json` does):
 in the active blue calibration's own units (parity issue P2), not his 15.
 
 The **Hadamard Stim** tab then shows one shared controller. Choose the
-session mode and the optional streams at the top (Session panel), then work
-through: Preflight (read only, one line per requirement; streams that are
+session mode and the optional streams at the top (Session panel). With a
+uniform slide under the objective, Take calibration scans (his `had_cal`
+recordings; they become the rig's scan calibration) and Calibrate blue LED
+(his slide method, run by Luminos, which keeps the calibration). Then, with the
+sample in place, work through: Preflight (read only, one line per requirement; streams that are
 off show "disabled"), Prepare rig, Take reference scan, Segment, Approve
 cells, Acquire z-reference (not needed for a spontaneous session without
 drift correction), Run.

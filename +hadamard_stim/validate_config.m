@@ -153,7 +153,7 @@ end
 
 function tf = used_by(path, session)
 % Whether a setting changes what a session of this mode does.
-if startsWith(path, ["session." "behavior." "schema_version" "mode"])
+if startsWith(path, ["session." "behavior." "calibration_scan." "schema_version" "mode"])
     tf = false;
     return
 end

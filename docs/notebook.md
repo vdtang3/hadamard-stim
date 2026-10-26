@@ -473,6 +473,54 @@ is unchanged, and every existing test uses it.
 - a 6-min block's stability and RAM on the rig PC;
 - stage and drift correction between long blocks.
 
+## 2026-10-16: taking the Hadamard calibration scans from the tab
+
+**Why.** Every scan reconstruction depends on his Hadamard calibration scans (`had_cal`): the reference image, the z-stack and drift correction. Until now the package only accepted their folders. He made them by hand on a uniform (Sharpie) slide before each session, with no script. Preparing the rig needs them, so they must be taken before it.
+
+**His settings** (`2025_03_08/150538_had_cal_1x_arch_1/RCaMPtopatch.set`):
+- `dragonflyStaticHadamardWaveform_yq`, one pass of the 64 patterns (64 frames, `RepeatEditField` 1);
+- camera exposure 10 ms on an 11 ms waveform period;
+- orange 0.1 V, blue 0;
+- a centred 512 × 512 camera area, the RCaMP filter;
+- three recordings `had_cal_1x_arch_1..3` (and `_gfp_` ones for GFP stacks).
+
+These are the defaults in `cfg.calibration_scan`, which no run counts as a deviation.
+
+**Camera area.** His reconstruction centre-crops the calibration to each scan's size (`ffzpad`), so his 512 × 512 calibration served his 448 × 328 scans. Here the scans are taken at the experiment's own camera area. That reconstructs identically when the areas share a centre, and lets the area be checked: each folder gets a `hadamard_calibration_scan.json` (settings, camera area and binning, DMD, time). The backend's scan-calibration check refuses scans taken at another area or binning, because reconstruction would be wrong.
+
+**How.**
+- `protocol.acquire_calibration_scans(cfg, env)`: the full-DMD scan patterns, his waveform at the calibration settings, no stage move, no streams. It restores the global random stream that the pattern generator reseeds.
+- The controller action `acquire_calibration_scans` is legal before the cells are approved. It runs on hardware from `backend.calibration_hardware(cfg)`: a `LuminosRig` begun with preflight purpose `"calibration_scan"`, which requires only the DAQ, the DMD and the imaging camera. No stage, blue LED, blue calibration or DMD calibration is needed.
+- `backend.record_calibration_scans` writes the records and makes the folders the `calibration_folders` setting. A rig prepared with the old scans is dropped, along with any proposal.
+- Abort reaches the acquisition being waited for, and the rig is released however the step ends. An aborted set leaves the previous calibration in place.
+- The adapter still runs no protocol step: the controller does.
+
+**Tests.** `TestCalibrationScans` (5): his recordings, the tab path before preparing with no stage, blue or DMD calibration, dropping a prepared rig, refusing another camera area, and abort. The frontend adds 1.
+
+## 2026-10-26: the blue LED is calibrated on the slide, by Luminos
+
+**Problem.** Real connectivity runs read the active Luminos calibration of "Blue LED 488" (decision of 2026-10-13: no Hadamard calibration store). On Firefly that could never exist:
+- Luminos's only routine, `Calibrate_DAQ_Modulator`, needs a `Power_Meter` device, and Firefly has none.
+- It never set `iscalibrated`, and the curve was not saved across sessions.
+- `Modulator_Device.apply_calibration` called a `maxima` that exists nowhere, so setting `iscalibrated` would have made every `level` change error, including Luminos zeroing outputs at exit.
+
+**Yitong's method.** He calibrated the blue LED on the slide, with the camera:
+- `RunSynchronizedAQSnap_blueSweep.m` snapped one frame per blue voltage, 0.1 to 5 V in 100 steps.
+- `blueLED_linearize_file_gen.m` took each frame's mean minus an LED-off baseline, giving `blueCal.mat`: voltage against camera counts. That is why his threshold of 15 is in camera counts.
+
+**Decision (Vincent, 2026-10-26): his slide method, in Luminos.** Changes in luminos-private:
+- `Measure_Modulator_On_Slide(modulator, camera, ...)` sets the raw command at each point (bypassing any calibration), snaps one frame, and turns the source off between points. It subtracts the mean of LED-off frames and records `[command; counts above baseline]` with `calibration_info` (method, units, camera with exposure/area/binning, baseline, time).
+  - `Calibrate_Modulator_On_Slide(app, name, camera=...)` is the app-level entry.
+- `Modulator_Device.Set_Calibration` records a calibration and saves it with the device's other config data (`AdditionalConfigData`, gitignored `.data`); the constructor loads it back.
+- `apply_calibration` interpolates along the rising part of the curve.
+- **`iscalibrated` is not changed** by recording a calibration. Turning it on would change what `level` means for everyone using that LED. So the active calibration is the recorded curve.
+- `active_blue_calibration` accepts a curve with `calibration_info` (or, as before, with `iscalibrated`). The identity carries the recorded method, units, camera and time. `blue_threshold` is now in camera counts, as his 15 was. It still has no default, because the camera and exposure are not necessarily his.
+- The tab's **Calibrate blue LED (slide)** (`calibrate_blue_led`) calls the routine through `LuminosBackend.calibrate_blue_led` on the blue LED and the imaging camera. Nothing is stored in the package. The prepared rig and any proposal are dropped.
+
+**Tests.** Luminos `TestModulatorSlideCalibration` (5): counts above baseline, saved and loaded in the next session, a failed sweep leaving the LED off and the old calibration, calibrated levels, out-of-range refusals. Package `TestCalibrationScans` adds 1: Calibrate blue LED from the tab, read back as the run's calibration.
+
+**Result (calibration scans and blue calibration together).** `run_tests('full')` under the 12 GB cap: 200 passed, 0 failed (peak 5.2 GB). Luminos: 39/39 (device, slide calibration, interrupts, user config, patterning calibration), 27 rig and 28 user files validate; frontend 157/157, typecheck clean, bundle builds.
+
 ## Parity issues (behaviour that may be a bug; reproduced, not fixed)
 
 - **P1. Reference-image orientation changed after the experiments.** `hadamard_ref.m` gained a transpose on 2026-02-10, after his 2025 data, alongside a Kinetix MEX change. In the newest snapshot, segmentation would run on the transposed image while drift correction compares untransposed scans with the untransposed `hadamard_ref`. The fixtures follow his 2025-03-08 session, which is the untransposed behaviour he actually ran. In Luminos the reference image, scans and DMD calibration must all share Luminos's camera orientation. **Confirmed 2026-10-13: the port follows the untransposed 2025 behaviour.** The transposed `hadamard_ref.m` stays frozen only as evidence.

@@ -521,6 +521,25 @@ These are the defaults in `cfg.calibration_scan`, which no run counts as a devia
 
 **Result (calibration scans and blue calibration together).** `run_tests('full')` under the 12 GB cap: 200 passed, 0 failed (peak 5.2 GB). Luminos: 39/39 (device, slide calibration, interrupts, user config, patterning calibration), 27 rig and 28 user files validate; frontend 157/157, typecheck clean, bundle builds.
 
+## 2026-10-26: the Firefly checks as MATLAB calls
+
+The four checks real runs need (hardware_gate) each have a function in `+hadamard_stim/+checks` that runs the check and returns `check_result(name, passed, evidence, details)`. `record_firefly_check(file, result)` writes it into the checks file the rig settings name; it replaces that entry, keeps the others, and records failures too.
+
+- `driver_check()`: `ALP_DMD.Probe_Drivers()` with Luminos closed. Passes when a driver opens the board and recognises a 1024 × 768 DMD.
+- `trigger_edge_check(app)`: `Get_State().trigger_edge` right after Luminos starts (2009 rising, 2008 falling). Gives the edge the configuration needs.
+- `queue_support_check(app)`: `Supports_Sequence_Queue()`.
+- `slide_queue_check(app)`, on a uniform slide.
+  - It loads a queue through `LuminosRig.dmd_load_queue`, the protocol's own path: 3 pictures × 2 repeats, then 2 × 3, so capacity 12.
+  - It steps the queue with one DAQ trigger per camera frame for 16 frames (his static Hadamard waveform at the calibration-scan settings, blue off).
+  - The pictures are nested bands of 1/6 to 5/6 of the DMD, so brightness rises with the picture and no DMD calibration is needed.
+  - Each frame is classified against a line fitted to the predicted pictures. The check passes when all 12 frames match `alp_queue_display`, with steps more than 5 × the noise.
+  - What the 4 frames after running dry showed is reported, not judged: the model leaves it open (Phase 2).
+  - It needs only the DAQ, DMD and camera, and releases the rig however it ends.
+
+These live in `+checks`, not `+luminos`, because they use the protocol's queue model and waveforms, and the adapter runs no protocol code. Tests: `TestFireflyChecks` (7), including a queue one trigger behind failing and recorded checks making the tab's preflight pass.
+
+**Result.** `run_tests('full')` under the 12 GB cap: 207 passed, 0 failed.
+
 ## Parity issues (behaviour that may be a bug; reproduced, not fixed)
 
 - **P1. Reference-image orientation changed after the experiments.** `hadamard_ref.m` gained a transpose on 2026-02-10, after his 2025 data, alongside a Kinetix MEX change. In the newest snapshot, segmentation would run on the transposed image while drift correction compares untransposed scans with the untransposed `hadamard_ref`. The fixtures follow his 2025-03-08 session, which is the untransposed behaviour he actually ran. In Luminos the reference image, scans and DMD calibration must all share Luminos's camera orientation. **Confirmed 2026-10-13: the port follows the untransposed 2025 behaviour.** The transposed `hadamard_ref.m` stays frozen only as evidence.

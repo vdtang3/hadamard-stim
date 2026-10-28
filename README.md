@@ -37,7 +37,10 @@ Phases 1 to 6 are complete off-rig.
   and the recipe records that they were off.
 
 Real acquisition still needs:
-- the Firefly hardware checks listed in `docs/notebook.md`;
+- the four Firefly hardware checks, each one MATLAB call in
+  `hadamard_stim.checks` (`driver_check`, `trigger_edge_check`,
+  `queue_support_check`, `slide_queue_check` on a slide) recorded with
+  `record_firefly_check(file, result)`;
 - a Luminos calibration of the blue LED, taken on the slide from the tab
   (a spontaneous session does not need it), and a `blue_threshold` in its
   camera counts.
@@ -61,6 +64,7 @@ connectivity session with the face camera and wheel encoder off.
   +waveform/               reading a waveform in either form (dense samples,
                            or a repeated description for long blocks)
   +metadata/               run recipe, trial and block records, checkpoints
+  +checks/                 the Firefly checks, run and recorded from MATLAB
   +ui/                     display products: config fields, numbered cells,
                            patterns, summaries (read only, no hardware)
   +luminos/                the only code that touches Luminos (LuminosRig,

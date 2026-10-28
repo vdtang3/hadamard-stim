@@ -30,6 +30,7 @@ classdef FakeAlpDmd < hadamard_stim.testing.FakeLuminosDevice
         Queue = []
         QueueSettings = []
         Displaying = "nothing"         % "stack", "queue", "static" or "dark"
+        PowerOnEdge = 2009             % ALP_VD_EDGE as Get_State reports it (2009 rising)
     end
 
     properties (Access = private)
@@ -48,6 +49,10 @@ classdef FakeAlpDmd < hadamard_stim.testing.FakeLuminosDevice
 
         function tf = Supports_Sequence_Queue(obj)
             tf = obj.SupportsQueue;
+        end
+
+        function state = Get_State(obj)
+            state = struct("trigger_edge", obj.PowerOnEdge);
         end
 
         function state = Get_Queue_State(obj)

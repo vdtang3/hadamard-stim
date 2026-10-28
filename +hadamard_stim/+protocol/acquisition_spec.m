@@ -5,8 +5,9 @@ function spec = acquisition_spec(kind, folder, waveform, options)
 %
 %   kind      "z_stack_plane", "drift_scan", "stimulation",
 %             "reference_scan" (acquire_reference_image) or "spontaneous"
-%             (one block of run_spontaneous) or "calibration_scan"
-%             (acquire_calibration_scans, on a slide)
+%             (one block of run_spontaneous), "calibration_scan"
+%             (acquire_calibration_scans, on a slide) or "queue_check"
+%             (checks.slide_queue_check, on a slide)
 %   folder    his folder name for it (the rig prefixes a time stamp)
 %   waveform  struct from scan_waveform, stimulation_waveform (dense:
 %             amplitude) or spontaneous_waveform (repeated: rows)
@@ -17,7 +18,7 @@ function spec = acquisition_spec(kind, folder, waveform, options)
 %   struct array. The hardware adapter reads the waveform, the camera
 %   fields and the streams; everything else is for the record.
 arguments
-    kind (1, 1) string {mustBeMember(kind, ["z_stack_plane" "drift_scan" "stimulation" "reference_scan" "spontaneous" "calibration_scan"])}
+    kind (1, 1) string {mustBeMember(kind, ["z_stack_plane" "drift_scan" "stimulation" "reference_scan" "spontaneous" "calibration_scan" "queue_check"])}
     folder (1, 1) string
     waveform struct
     options.trial (1, 1) double = NaN

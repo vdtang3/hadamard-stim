@@ -7,6 +7,8 @@ classdef FakeLuminosCamera < hadamard_stim.testing.FakeLuminosDevice
         bin = 1
         compression_method = "None"
         ROI = [0 448 0 328]            % [left width top height]
+        bit_depth = 16                 % storage bits (Luminos Camera.bit_depth)
+        bit_mode_label = '16-bit'
         frametrigger_source_ = "Off"
         frames_requested_ = 1
         acquisition_exposuretime_ = 0.15

@@ -1,5 +1,5 @@
 function result = driver_check(report)
-%DRIVER_CHECK Firefly check 1: an ALP driver opens the board and knows its 1024 x 768 DMD.
+%DRIVER_CHECK Installation diagnostic: an ALP driver opens the board and knows its 1024 x 768 DMD.
 %
 %   result = hadamard_stim.checks.driver_check()          % runs ALP_DMD.Probe_Drivers()
 %   result = hadamard_stim.checks.driver_check(report)    % a probe report already taken
@@ -7,6 +7,11 @@ function result = driver_check(report)
 %   Run it with Luminos closed: a board Luminos holds cannot be opened by
 %   the probe. Passes when some driver opened a board, recognised its DMD,
 %   and the DMD is 1024 x 768 (his masks are packed for an XGA board).
+%
+%   An installation and troubleshooting step (README, "First-time
+%   installation"), repeated after the ALP MEX, DLLs, driver or board
+%   change. It is not readiness: whether Luminos has the board open now is
+%   checked live by the preflight.
 if nargin < 1
     report = ALP_DMD.Probe_Drivers();
 end
@@ -31,6 +36,11 @@ elseif isempty(good)
 else
     evidence = "Opens and recognises the board: " + good(1) + ".";
 end
+provenance = hadamard_stim.checks.check_provenance();
+if ~isempty(good)
+    opened = arrayfun(@(r) r.status == 0 && logical(r.recognised) && r.width == 1024 && r.height == 768, report);
+    provenance.dmd_serial = report(find(opened, 1)).serial;
+end
 result = hadamard_stim.checks.check_result("driver", ~isempty(good), evidence, ...
-    struct("drivers", rows));
+    struct("drivers", rows), provenance);
 end

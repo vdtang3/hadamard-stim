@@ -26,6 +26,12 @@ function view = controller_view(controller, name, args)
 %                      resume continues from (ui.checkpoint_summary)
 %     diagnostics      what the rig's devices report now (backend)
 %     run_folders      run folders a resume could continue (backend)
+%     calibration_scan_sets   earlier Hadamard calibration scan sets, with
+%                      whether each fits the camera now (backend); reusing
+%                      one is set_rig_settings with its folders
+%     commissioning_checklist Firefly's bring-up by stage: installation,
+%                      occasional, bring-up, first animal (not the daily
+%                      workflow)
 arguments
     controller (1, 1) hadamard_stim.HadamardStimController
     name (1, 1) string
@@ -58,6 +64,11 @@ try
         case "run_folders"
             require_backend(controller);
             view.data = controller.Backend.run_folders();
+        case "calibration_scan_sets"
+            require_backend(controller);
+            view.data = controller.Backend.calibration_scan_sets();
+        case "commissioning_checklist"
+            view.data = hadamard_stim.ui.commissioning_checklist();
         otherwise
             view.ok = false;
             view.message = "There is no view called '" + name + "'.";

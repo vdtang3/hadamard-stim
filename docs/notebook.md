@@ -540,6 +540,296 @@ These live in `+checks`, not `+luminos`, because they use the protocol's queue m
 
 **Result.** `run_tests('full')` under the 12 GB cap: 207 passed, 0 failed.
 
+## 2026-10-27: readiness — warn and record; block only what cannot run
+
+**Decision (Vincent).** The experimenter may go ahead after being clearly
+warned about a scientific or data-quality risk. Hard refusals are kept for
+what is impossible, undefined, or a conflict over the hardware. The
+resume-on-a-changed-calibration rule of 2026-10-15 is the model, now
+general: say what changed and what it means, offer one "Continue anyway",
+record it.
+
+**Readiness items.** Every check is a `metadata.readiness_item` (id,
+label, status, message, consequence, group, details) with status pass /
+info / warning / blocker / disabled / not_needed; `metadata.readiness_report`
+gives `can_run` (no blockers), `blockers`, `warnings`, `info`, `checks`.
+Warnings never make `can_run` false. `luminos.preflight`,
+`LuminosBackend.preflight`, `LuminosRig.begin` and `make_environment`
+return or act on this report; `report.ok` is gone.
+
+**What blocks (no override).**
+- Luminos on another rig (the port map is Firefly's wiring), or acquiring.
+- A device the session needs is missing (an enabled face camera included).
+- The DMD: no open board (`mexPointer` 0 or debug mode, new), another
+  owner, another canvas size, `invert_output` (blue on everything but the
+  cells), no live sequence-queue support for connectivity.
+- The DAQ: no `global_props`; another waveform on one of the protocol's
+  ports.
+- Encoder lines that cannot be recorded; a block that does not fit in memory.
+- A compressed camera (the package reads raw frames).
+- No usable blue calibration or no `blue_threshold` (below); no
+  camera-to-DMD transform, the active transform not the Kinetix's (the
+  record would name a transform that was not used), or no calibration
+  reference image.
+- No Hadamard calibration scans when the session reconstructs; named
+  folders that do not exist; an unwritable data folder.
+- The configuration's own errors; no approved cells, no z-reference, rig
+  not prepared (for Run).
+
+**What warns.**
+- The four Firefly checks: never recorded, recorded as failed (the slide
+  test's failure says to continue only for diagnostic data), older than
+  180 days, recorded under another Luminos commit or on another DMD
+  serial, or a configured trigger edge other than the commissioned one.
+  What is impossible now is found live instead (board, queue support).
+  Another hadamard-stim commit is only a note.
+- DAQ on an external clock or with a clock-rate override; another
+  waveform on a port the protocol does not drive (it does not play during
+  acquisitions).
+- Camera binning; a DMD calibration taken at another camera area or
+  binning; Hadamard scans taken at another area or binning (the
+  reconstruction pads or crops, so it runs, but may be spatially wrong) or
+  without a record of their area.
+- Blue calibration and Hadamard scans older than 7 days (another day
+  within 7 days is a note: "reused").
+- Settings that differ from Yitong's (one item for all of them).
+
+**Notes (info).** Streams that are off, the Waveforms tab at another rate
+(each acquisition sets the protocol's and restores it), a calibration
+reused from an earlier day, a DMD calibration without a recorded time.
+
+The ages are in `firefly_profile().stale_after_days`. *(Superseded
+2026-10-28: age is never a warning; the driver and trigger-edge checks
+left readiness.)*
+
+**Missing blue calibration stays a blocker.** His blue values (`sparse.blue_v`,
+the Hadamard blue) are "linear" 0–5 intensities that `linearize_blue_voltage`
+maps through the curve (normalised to its maximum), not volts. Reading them
+as raw modulator volts would be a different experiment that only looks
+the same: the same number would give another power. Nothing in the code or
+data says how to interpret them without a curve, so no command is defined.
+A raw-volt mode would need its own setting (e.g. `stimulation.blue_command
+= "raw_volts"`), values checked against the modulator's range, a recipe
+identity that says "uncalibrated", and its own deviation; it is not built.
+
+**One override.** `startRun(..., AcknowledgedWarnings=ids, OperatorNote=...)`
+(`start_run` with `acknowledged_warnings`, `operator_note`) computes a
+fresh readiness (preflight with a backend; the recorded checks otherwise),
+refuses with `hadamard_stim:HardwareNotReady` on any blocker and with
+`hadamard_stim:WarningsNotAcknowledged` unless every warning id is
+acknowledged. The recipe gains `start_override` (operator_override,
+acknowledged_utc, operator_note, each warning with message, consequence
+and details), or `[]` when there were none, so no recipe claims an override
+nobody made. Trial records are unchanged. Setup (prepare, reference scan,
+z-reference) never asks: warnings are shown, only blockers refuse.
+
+**Resume uses the same machinery.** Its warnings are the rig's now plus a
+changed blue or DMD calibration (`calibration_changed_blue` /
+`_geometry`); the configuration's deviations were acknowledged at the
+start and are not asked again. `ContinueWithChangedCalibration` still
+acknowledges the calibration ones, and a changed calibration alone still
+stops with `hadamard_stim:CalibrationChanged`. `resumes/resume_NNN.json`
+gains `operator_override` and `override`.
+
+**Commissioning records carry provenance.** `check_result` stores
+`provenance` (`checks.check_provenance`): hadamard-stim and Luminos
+commits, DMD serial, model and API, camera and DAQ. The tab can run
+`queue_support` and `slide_queue` again (`run_commissioning_check`); the
+driver check (Luminos closed) and the trigger edge (right after Luminos
+starts) stay MATLAB calls, and the tab shows the call.
+
+**Calibrations are reusable.** `LuminosBackend.calibration_scan_sets` lists
+earlier scan sets under the data folders with whether each fits the camera
+now; reusing one is `set_rig_settings` with its folders. The blue
+calibration is Luminos's and persists across sessions.
+
+**The tab** (luminos-private `vdtang3/hadamard-stim`): Session, Rig readiness
+(one line each for the rig's devices, DMD queue, trigger edge, DMD
+geometry, blue calibration and Hadamard scans, with dates; everything
+else under a collapsed "Rig / commissioning": commissioning records with
+provenance and rerun, calibration actions and earlier scan sets, every
+check, the rig settings, and the commissioning checklist), FOV setup
+(prepare, reference image, cells, z-reference) and Run (blockers in red
+with Run disabled; warnings counted, reviewable, and acknowledged in one
+dialog with an optional note). The checklist (`ui.commissioning_checklist`,
+25 steps from this notebook's "still needs Firefly" lists) is labelled as
+first bring-up, not a daily procedure.
+
+**Screenshots.** `tools/gui_states/export_gui_states.m` drives the real
+controller on the fake Firefly into ready / warnings / blocker states and
+writes the tab's input; luminos-private `frontend/harness/` renders the
+real tab from them (development only, `vite.harness.config.js`).
+
+## 2026-10-28: two DMD checks, an explicit edge, and calibrations that do not expire
+
+**Decisions (Vincent).** (1) The driver probe and the power-on trigger edge
+leave readiness. (2) The queue's trigger edge is set by the protocol,
+rising, instead of discovered. (3) The tab's DMD commissioning is two
+checks: sequence-queue support and queue playback on a slide.
+(4) Calibration age informs the experimenter; it does not expire the
+calibration. (5) `spontaneous.n_blocks` is run scope.
+
+**The driver probe is installation, not readiness.** `ALP_DMD.Probe_Drivers`
+opens the board itself, so it needs Luminos closed and cannot belong to a
+tab that exists only while Luminos runs. `checks.driver_check` stays as a
+diagnostic, documented in the README (First-time installation; repeat
+after a MEX, DLL, driver or board change, or to diagnose a board Luminos
+cannot open). Nothing reads its record. Whether Luminos has the board open
+is read live (`dmd_board`), which is what can actually stop a run.
+
+**The edge is explicit: rising.** His `load_sequence_multi` never set
+`ALP_VD_EDGE`, so his trials used the board's power-on edge, which is why
+it was a commissioning check. `ALP_DMD.Load_Sequence_Queue` takes the edge
+as a required argument (`"rising"`/`"falling"`) and the MEX sets it, so
+the board's startup state no longer matters. Rising was chosen because:
+- Luminos's stack path (`Write_Stack`, the scan patterns) already uses it;
+- the off-rig model counts each rising edge of `dmdTrigger` as one advance
+  (`protocol.queue_trigger_invariants`, `TestAlpQueueModel`), and the
+  640-trial parity checks pass on that model;
+- each `dmdTrigger` pulse returns to 0 before the next, so every intended
+  advance has exactly one rising edge;
+- nothing in his code or data requires falling.
+
+`default_config().dmd.trigger_edge = "rising"`; it is no longer required
+input nor a tab field (`ui.config_fields`), is recorded with the
+configuration in every recipe, and another edge is a deviation. A new
+standing deviation says: "DMD queue trigger edge is explicitly set to
+rising; Yitong's original loader inherited the board's existing edge."
+`checks.trigger_edge_check` stays as a historical diagnostic.
+`slide_queue_check` defaults to the protocol's edge (it no longer reads the
+board's), so the slide test verifies the edge the runs use.
+
+**The two DMD checks** (`hardware_gate`, `hardware_checks`):
+- `queue_support`: history only. The live `Supports_Sequence_Queue` is
+  asked at every preflight (`dmd_queue`), and that blocks connectivity when
+  false. The record never warns, whatever it says.
+- `slide_queue`: the evidence. Never run or failed is a warning. A pass
+  stays a pass until it is no longer evidence about this rig: another DMD
+  serial, a record on another edge, or Luminos's DMD code changed since
+  (warning). A Luminos commit change alone is not a warning:
+  `luminos.dmd_code_changed` asks git whether
+  `firefly_profile().luminos_dmd_paths` (`src/Devices/Patterning/DMD/ALP`)
+  differ between the record's commit and now. Same code, or not
+  comparable (no git, unknown commit), is a note; another hadamard-stim
+  commit is a note. A spontaneous session needs neither.
+
+`run_commissioning_check` runs these two; the controller reads the rig
+again afterwards, so the tab shows the new record.
+
+**Age is information, not validity.** `metadata.calibration_age` words a
+time ("Taken today (Oct 28, 2026)", "Taken Oct 19, 2026 (9 days ago)",
+"3 weeks ago", "4 months ago", "Date not recorded"). Blue calibration, DMD
+geometry and Hadamard scans: taken today passes; any other day, or no
+recorded date, is a note ("reused"). `firefly_profile().stale_after_days`
+is gone, and with it every age threshold. A calibration warns only for a
+reason to distrust it, whatever its age: taken at another camera area or
+binning (DMD geometry, scans), scans without a record of their area, or a
+calibration changed during a run (resume). It blocks only when nothing
+usable exists for an operation that needs it: no blue curve (connectivity),
+no Kinetix transform or one that would make the record false, no scans
+when drift correction or the z-reference reconstructs.
+
+**Run scope.** `spontaneous.n_blocks` is skipped by `validate_config` like
+the trial range; `spontaneous.block_frames` remains a deviation (block
+duration, and when drift and bleaching are corrected).
+
+**The tab.** Rig readiness: Rig devices, Rig prepared (with Prepare rig,
+moved out of FOV setup), DMD queue (live support and the slide test),
+DMD geometry, Blue calibration, Hadamard scans, each with its age.
+Collapsed below: DMD commissioning (Sequence queue: Run check; Queue
+playback on slide: Run on slide, with provenance), Calibrations (DMD
+geometry; Blue LED: Calibrate blue LED; Hadamard scans: Take new scans,
+Find earlier scans), a pointer to the README for the driver, rig settings,
+all checks, and the checklist. FOV setup is 1 Reference image, 2 Cells,
+3 Z reference, then Run. The Configuration panel stays open.
+
+**Checklist** (`ui.commissioning_checklist`) has stages: one-time
+installation (outside Luminos), occasional commissioning (in Luminos),
+first bring-up on the slide, first biological commissioning (connectivity
+with face camera and encoder off, trials 1-4, a deliberate Abort, Resume
+repeating the incomplete trial, then the face camera, the encoder, and
+spontaneous blocks separately). It and the README say commissioning steps
+are not the daily workflow.
+
+## 2026-10-28 (later): who owns what in an acquisition; the orange preview
+
+**Calibration age is text only.** A compatible calibration (blue, DMD
+geometry, Hadamard scans) now *passes* whatever its age; "Taken Oct 19,
+2026 (9 days ago) — reused" is its message, not an info status. Only a
+misfit warns or blocks.
+
+**Audit: the DAQ without the Waveforms tab.** Luminos's `DAQ.global_props`
+and `wfm_data` start as `[]`; only the Waveforms tab's frontend
+(`getDefaultGlobalProps` filled by `get_wfm_startup_info_js`) or
+`load_waveform_from_json` fills them, and `Build_Waveforms` reads
+`global_props.total_time` unguarded. `LuminosRig` set only `rate` and
+`total_time` and inherited the tab's clock and trigger, and preflight
+blocked "open the Waveforms tab once". Adaptive Optopatch also requires an
+active waveform. Changes:
+- Luminos gains `DAQ.Default_Global_Props` (static
+  `DAQ.Waveform_Tab_Defaults`, tested in `TestDaqWaveformDefaults`): the
+  tab's own starting values, so nothing fabricates a partial struct.
+- `LuminosRig.acquire` starts from it when the tab never ran, and sets
+  for every acquisition: rate (`cfg.daq.rate`), `clock_source`
+  (`firefly_profile().daq_clock_source`, "Internal Dev1": his DAQ ran on
+  its own clock), `daq_master` true (self-triggered), `completion_trigger`
+  "None", `total_time`, and clears `external_clock_rate`. All of it is
+  journaled and restored, including `external_clock_rate`.
+- Preflight no longer blocks on missing settings, and another tab rate,
+  clock or clock-rate override is a note (it is set aside and put back).
+  A foreign waveform on a protocol port still blocks: Luminos has no DAQ
+  ownership, so exclusivity is only the per-acquisition replacement of
+  the output list. The always-mounted Waveforms tab re-pushes its
+  settings when its contents change; editing it during an acquisition is
+  still unsafe (not new).
+
+**Audit: the Kinetix.** `frametrigger_source` other than Off/Standalone
+maps to PVCAM `EXT_TRIG_EDGE_RISING` (`Kinetix_Cam.cpp:1104`): one frame
+per rising edge, exposure as programmed. Luminos exposes no other trigger,
+readout, clear or scan mode, so the package's three settings
+(`frametrigger_source` "External", `frames_requested` = rising edges,
+`acquisition_exposuretime`) are the whole of the timing it can own; they
+are journaled and restored, also after a failure. Inherited from the
+Camera tab: ROI, binning and Bit Depth (PVCAM port/speed). An 8-bit
+storage mode is now a blocker (`read_frames` reads uint16). Not checked:
+exposure plus the camera's frame overhead against the trigger period
+(`Camera.frameOverhead` is only valid after setup); his 0.02 ms margin is
+kept.
+
+**`cfg.camera.rows` was his live area, not a constant.** His
+`dragonflyStaticHadamardWaveform_yq` takes `nRows =
+df_app.camApp.liveArea(1)`; on 2025-03-08 `RCaMPtopatch.set` has
+`ActiveareaDropDown: "328 x 448"` and `experimental_parameters.txt`
+"Vertical pixel: 328". So it is the acquisition area's sensor rows, read
+from the camera each time, and the blanking is 3.75 µs per row. It is now
+`hw.camera_rows()`: `LuminosRig` reads `getROIForAcquisition()` (`[x
+width y height]`, unbinned) element 4; `SimulatedRig` gives his 328.
+`scan_waveform` requires it (`camera_rows=`) and records it in
+`waveform.settings.n_rows`. `cfg.camera.rows` is removed from the
+configuration. 328 rows reproduce his scan samples exactly; 200 rows
+light each frame 48 samples earlier.
+
+**Field of view is inherited and shown.** `LuminosBackend.imaging_camera`
+(getState `imaging_camera`) gives the Kinetix ROI, size, binning and Bit
+Depth; the tab shows it under a short "controls / inherited" note at the
+top.
+
+**Orange preview.** To choose `stimulation.orange_start_v` on the live
+image: `startOrangePreview` (`start_orange_preview`) holds a hardware
+session (`holdHardware`), shows `Cells.illum_mask` through
+`LuminosRig.dmd_show_mask` (owned, `Write_Static`, journaled) and sets
+Luminos's "Red LED 615" modulator `.level` (the Main tab's own on-demand
+AO write; volts, Firefly gives it no calibration, 0–4.5 V) to
+`orange_start_v` (0 V while unset). Changing `orange_start_v` moves the
+LED; a value outside its range ends the preview. Release turns the LED to
+0 V first, then blanks the DMD, then releases ownership (Adaptive
+Optopatch's order); the level is not restored to what it was, because
+Luminos does not track it after a buffered run and a lit LED must not
+outlive the preview. `beginHardware` and every setup, calibration,
+commissioning, run, resume and new-session path stop it first, as do
+Abort and the controller's `delete`. The LED is not a run requirement
+(`profile.orange_modulator`, outside `profile.devices`).
+
 ## Parity issues (behaviour that may be a bug; reproduced, not fixed)
 
 - **P1. Reference-image orientation changed after the experiments.** `hadamard_ref.m` gained a transpose on 2026-02-10, after his 2025 data, alongside a Kinetix MEX change. In the newest snapshot, segmentation would run on the transposed image while drift correction compares untransposed scans with the untransposed `hadamard_ref`. The fixtures follow his 2025-03-08 session, which is the untransposed behaviour he actually ran. In Luminos the reference image, scans and DMD calibration must all share Luminos's camera orientation. **Confirmed 2026-10-13: the port follows the untransposed 2025 behaviour.** The transposed `hadamard_ref.m` stays frozen only as evidence.
@@ -550,6 +840,6 @@ These live in `+checks`, not `+luminos`, because they use the protocol's queue m
 
 ## Open questions
 
-- Which ALP DLL opens Firefly's DMD, whether it accepts `ALP_PROJ_QUEUE_MODE`, and the board's power-on trigger edge. See the Phase 2 rig checks.
+- Which ALP DLL opens Firefly's DMD and whether it accepts `ALP_PROJ_QUEUE_MODE` (driver probe, README). The board's power-on edge no longer matters: queues are loaded on the rising edge (2026-10-28), which the slide test verifies.
 - His starting orange voltage for stimulation trials was not saved. The fixtures use a 1.0 V placeholder; it only scales the orange row.
 - Whether `saved_mask` was set during his 2025 sessions is unknown. The drift fixture covers both cases.

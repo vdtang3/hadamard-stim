@@ -124,9 +124,12 @@ classdef TestCalibrationScans < matlab.unittest.TestCase
             testCase.verifyEqual(r.status, "not_legal");
         end
 
-        function scansFromAnotherCameraAreaAreRefused(testCase)
+        function scansFromAnotherCameraAreaAreAWarning(testCase)
             % A backend that reads its scan calibration from folders, as on
-            % the rig.
+            % the rig. No scans: reconstruction is impossible (blocker).
+            % Scans from another camera area: reconstruction still runs
+            % (the calibration is centre-cropped or padded) but may be
+            % spatially wrong, so the operator is warned, not refused.
             [~, app] = tab_session(testCase.Folder);
             backend = hadamard_stim.luminos.LuminosBackend(app, blue_threshold=15, ...
                 hardware_validation_file=fullfile(testCase.Folder, "firefly_checks.json"), ...
@@ -137,15 +140,31 @@ classdef TestCalibrationScans < matlab.unittest.TestCase
             c.setConfig(cfg);
             c.runPreflight();
             check = @() c.Preflight.checks(string({c.Preflight.checks.id}) == "scan_calibration");
-            testCase.verifyEqual(check().status, "fail");
+            testCase.verifyEqual(check().status, "blocker");
             c.acquireCalibrationScans();
             c.runPreflight();
             testCase.verifyEqual(check().status, "pass");
+            testCase.verifySubstring(check().message, "Taken today");
+            % A year later, at the same area: reused, a note, still runnable.
+            file = fullfile(backend.settings().calibration_folders(1), "hadamard_calibration_scan.json");
+            record = jsondecode(fileread(file));
+            record.taken_utc = string(datetime("now", "TimeZone", "UTC") - days(365), "yyyy-MM-dd'T'HH:mm:ss'Z'");
+            fid = fopen(file, "w");
+            fwrite(fid, jsonencode(record));
+            fclose(fid);
+            c.runPreflight();
+            testCase.verifyEqual(check().status, "pass");
+            testCase.verifySubstring(check().message, "12 months ago");
+            testCase.verifySubstring(check().message, "reused");
+            testCase.verifyTrue(c.Preflight.can_run);
+            % The mismatch warns, whatever the age.
             camera = app.getDevice("Camera");
             camera(1).ROI = [0 512 0 512];
             c.runPreflight();
-            testCase.verifyEqual(check().status, "fail");
-            testCase.verifySubstring(check().message, "Take the calibration scans again");
+            testCase.verifyEqual(check().status, "warning");
+            testCase.verifySubstring(check().message, "Taken at camera area [0 448 0 328]");
+            testCase.verifySubstring(check().consequence, "may be spatially wrong");
+            testCase.verifyTrue(check().overrideable);
         end
 
         function theBlueLedIsCalibratedOnTheSlideByLuminos(testCase)

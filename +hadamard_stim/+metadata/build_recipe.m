@@ -1,7 +1,8 @@
-function [recipe, arrays] = build_recipe(cfg, state, context)
+function [recipe, arrays] = build_recipe(cfg, state, context, start_override)
 %BUILD_RECIPE The immutable description of a run, written once at its start.
 %
 %   [recipe, arrays] = hadamard_stim.metadata.build_recipe(cfg, state, context)
+%   [recipe, arrays] = hadamard_stim.metadata.build_recipe(cfg, state, context, start_override)
 %
 %   cfg      validated configuration
 %   state    hadamard_stim.protocol.new_run_state (before the first trial)
@@ -23,6 +24,12 @@ function [recipe, arrays] = build_recipe(cfg, state, context)
 %   (session_mode), which optional streams were recorded or deliberately
 %   left off (streams), and how the session differs from his collection
 %   without changing what it measures (warnings).
+%
+%   start_override is what the operator acknowledged to start the run:
+%   operator_override (true), acknowledged_utc, operator_note and the
+%   warnings (id, label, status, message, consequence, details), as the
+%   controller found them. [] (the default) when the run started with no
+%   warnings, so a recipe never carries an override nobody made.
 %
 %   recipe is JSON-safe; every later record carries recipe.recipe_hash, the
 %   SHA-256 of its canonical JSON. arrays holds what is too big for JSON
@@ -89,6 +96,10 @@ recipe.simulated = isfield(context, "simulated") && context.simulated;
 recipe.calibrations.geometry = context.geometry_identity;
 recipe.calibrations.blue = context.blue_calibration.identity;
 recipe.calibrations.blue_source = context.blue_calibration.source;
+if nargin < 4
+    start_override = [];
+end
+recipe.start_override = start_override;
 if isfield(context, "hardware")
     % What the rig reported about itself (hadamard_stim.luminos.hardware_facts).
     recipe.hardware = context.hardware;

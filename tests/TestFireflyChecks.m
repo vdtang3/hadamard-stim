@@ -1,10 +1,10 @@
 classdef TestFireflyChecks < matlab.unittest.TestCase
-    %TESTFIREFLYCHECKS The four Firefly checks, run and recorded from MATLAB.
+    %TESTFIREFLYCHECKS The Firefly checks, run and recorded from MATLAB.
     %
-    %   Each check reads the rig (driver probe, trigger edge, queue support)
-    %   or runs a small queue on a slide and compares the camera with the
-    %   queue model; record_firefly_check writes the outcome into the file
-    %   the rig settings name, which is what lets real runs start.
+    %   The two DMD commissioning checks (queue support, queue playback on a
+    %   slide) are recorded in the file the rig settings name and shown as
+    %   readiness. The driver probe and the power-on edge are diagnostics:
+    %   they still run, but readiness does not read them.
 
     properties
         Root
@@ -46,7 +46,7 @@ classdef TestFireflyChecks < matlab.unittest.TestCase
             testCase.verifySubstring(r.evidence, "No ALP driver");
         end
 
-        function theTriggerEdgeIsWhatTheBoardReports(testCase)
+        function theTriggerEdgeDiagnosticReadsTheBoard(testCase)
             [~, app] = tab_session(testCase.Folder);
             dmd = app.getDevice("ALP_DMD");
             r = hadamard_stim.checks.trigger_edge_check(app);
@@ -67,8 +67,10 @@ classdef TestFireflyChecks < matlab.unittest.TestCase
             testCase.verifySubstring(r.evidence, "returned false");
         end
 
-        function theSlideQueuePlaysAsModelled(testCase)
+        function theSlideQueuePlaysAsModelledOnTheProtocolsEdge(testCase)
+            % No edge given: the protocol's own, rising, set explicitly.
             [~, app] = tab_session(testCase.Folder);
+            app.getDevice("ALP_DMD").PowerOnEdge = 2008;    % the board starts falling
             n = numel(app.Acquisitions);
             r = hadamard_stim.checks.slide_queue_check(app, ...
                 acquisition_function=@hadamard_stim.testing.fake_luminos_acquisition, ...
@@ -78,6 +80,7 @@ classdef TestFireflyChecks < matlab.unittest.TestCase
             testCase.verifySubstring(r.evidence, "12 of 12 triggers");
             testCase.verifySubstring(r.evidence, "rising edge");
             testCase.verifySubstring(r.evidence, "held picture 5");
+            testCase.verifyEqual(r.details.trigger_edge, "rising");
             % Through the protocol's own queue call: the queue, the edge, one
             % acquisition of 16 frames, then the DMD handed back.
             a = app.Acquisitions(n + 1:end);
@@ -113,7 +116,7 @@ classdef TestFireflyChecks < matlab.unittest.TestCase
             testCase.verifyEqual(numel(app.Acquisitions), n);
         end
 
-        function recordedChecksLetRealRunsStart(testCase)
+        function recordedChecksClearTheirWarnings(testCase)
             [~, app] = tab_session(testCase.Folder, validated=false);
             file = fullfile(testCase.Folder, "firefly_checks.json");
             backend = hadamard_stim.luminos.LuminosBackend(app, blue_threshold=15, ...
@@ -122,11 +125,11 @@ classdef TestFireflyChecks < matlab.unittest.TestCase
             c = hadamard_stim.HadamardStimController(backend);
             gate = @() string({c.Preflight.checks(startsWith(string({c.Preflight.checks.id}), "firefly_")).status});
             c.runPreflight();
-            testCase.verifyEqual(gate(), repmat("fail", 1, 4));
+            % A failed queue-support record is history (the live driver says
+            % yes); a failed slide test is a warning.
+            testCase.verifyEqual(gate(), ["info" "warning"]);
 
-            results = {hadamard_stim.checks.driver_check(probe("alp4395.dll", 0, true, 1024, 768)), ...
-                hadamard_stim.checks.trigger_edge_check(app), ...
-                hadamard_stim.checks.queue_support_check(app), ...
+            results = {hadamard_stim.checks.queue_support_check(app), ...
                 hadamard_stim.checks.slide_queue_check(app, ...
                     acquisition_function=@hadamard_stim.testing.fake_luminos_acquisition, ...
                     frame_means=@(acq) slide_means(0))};
@@ -134,17 +137,17 @@ classdef TestFireflyChecks < matlab.unittest.TestCase
                 hadamard_stim.checks.record_firefly_check(file, results{k});
             end
             c.runPreflight();
-            testCase.verifyEqual(gate(), repmat("pass", 1, 4));
+            testCase.verifyEqual(gate(), ["pass" "pass"]);
             saved = jsondecode(fileread(file));
             testCase.verifySubstring(saved.slide_queue.evidence, "12 of 12");
             testCase.verifyTrue(hadamard_stim.metadata.hardware_gate( ...
-                struct("hardware_validation", saved)).ok);
+                struct("hardware_validation", saved)).all_passed);
             % A failed rerun replaces that entry only, and is kept as failed.
             app.getDevice("ALP_DMD").SupportsQueue = false;
             hadamard_stim.checks.record_firefly_check(file, hadamard_stim.checks.queue_support_check(app));
             saved = jsondecode(fileread(file));
             testCase.verifyFalse(saved.queue_support.passed);
-            testCase.verifyTrue(saved.driver.passed);
+            testCase.verifyTrue(saved.slide_queue.passed);
         end
     end
 end

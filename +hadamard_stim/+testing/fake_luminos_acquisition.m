@@ -51,11 +51,12 @@ end
 cameras = app.getDevice("Camera");
 folder = fullfile(app.datafolder, sprintf('%06d', n) + string(options.tag));
 mkdir(folder);
-cams = struct("name", {}, "frametrigger_source", {}, "frames", {}, "exposure_s", {});
+cams = struct("name", {}, "frametrigger_source", {}, "frames", {}, "exposure_s", {}, "roi", {});
 for k = 1:numel(cameras)
     c = cameras(k);
     cams(end+1) = struct("name", c.name, "frametrigger_source", c.frametrigger_source, ...
-        "frames", c.frames_requested, "exposure_s", c.acquisition_exposuretime); %#ok<AGROW>
+        "frames", c.frames_requested, "exposure_s", c.acquisition_exposuretime, ...
+        "roi", c.getROIForAcquisition()); %#ok<AGROW>
     roi = c.getROIForAcquisition();
     bytes = c.frames_requested * roi(2) * roi(4) * 2;
     % Sparse: all zeros, and no disk or (on tmpfs) memory until written.
@@ -67,7 +68,12 @@ Device_Data = {}; %#ok<NASGU>
 save(fullfile(folder, "output_data.mat"), "Device_Data");
 
 dmd = app.getDevice("ALP_DMD");
+external_clock_rate = [];
+if isprop(daq, "external_clock_rate")
+    external_clock_rate = daq.external_clock_rate;
+end
 record = struct("tag", string(options.tag), "folder", folder, "rate", gp.rate, ...
+    "global_props", gp, "external_clock_rate", external_clock_rate, ...
     "n_samples", N, "ports", ports, "cameras", cams, ...
     "stack", dmd.Stack, "queue", dmd.Queue, "queue_settings", dmd.QueueSettings, ...
     "dmd_owner", dmd.pattern_owner, "dmd_showing", dmd.Displaying);

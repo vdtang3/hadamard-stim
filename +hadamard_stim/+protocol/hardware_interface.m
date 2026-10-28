@@ -23,12 +23,18 @@ function methods_ = hardware_interface()
 %                                          spec (acquisition_spec); returns
 %                                          spec plus what was done
 %     im = movie_mean(acq, frames)         mean image of those frames
+%     n = camera_rows()                    sensor rows in the imaging
+%                                          camera's acquisition area (his
+%                                          camApp.liveArea(1)): the scan's
+%                                          rolling-shutter blanking
 %
 %   Used by the controller around a session of hardware use (never by
 %   +protocol):
 %     report = begin(cfg)                  read-only checks that the rig can
-%                                          run cfg, then adopt it; report.ok,
-%                                          report.failures (strings)
+%                                          run cfg, then adopt it: a readiness
+%                                          report (report.can_run, false only
+%                                          for blockers; report.failures, the
+%                                          blockers' messages)
 %     report = release()                   return the rig to how it was
 %                                          found; safe to call at any time,
 %                                          any number of times; report.ok,
@@ -40,5 +46,5 @@ function methods_ = hardware_interface()
 %                                          next begin. Safe to call from a
 %                                          callback while an operation waits.
 methods_ = ["motor_position" "motor_move_to" "dmd_load_stack" "dmd_load_queue" ...
-    "dmd_show_mask" "acquire" "movie_mean" "begin" "release" "abort"];
+    "dmd_show_mask" "acquire" "movie_mean" "camera_rows" "begin" "release" "abort"];
 end

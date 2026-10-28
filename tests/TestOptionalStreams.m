@@ -49,16 +49,16 @@ classdef TestOptionalStreams < matlab.unittest.TestCase
                         status = @(id) checks(string({checks.id}) == id).status;
                         name = sprintf("%s face=%d encoder=%d", mode, face, encoder);
                         testCase.verifyEqual(status("device_behavior_camera"), ...
-                            pick(face, "fail", "disabled"), name);
+                            pick(face, "blocker", "disabled"), name);
                         testCase.verifyEqual(status("wheel_encoder"), ...
                             pick(encoder, "pass", "disabled"), name);
-                        testCase.verifyEqual(c.Preflight.ok, ~face, name);
+                        testCase.verifyEqual(c.Preflight.can_run, ~face, name);
                         spontaneous = mode == "spontaneous";
                         testCase.verifyEqual(status("device_blue_modulator"), ...
                             pick(spontaneous, "not_needed", "pass"), name);
                         testCase.verifyEqual(status("dmd_queue"), pick(spontaneous, "not_needed", "pass"), name);
                         testCase.verifyEqual(any(string({checks.id}) == "block_memory"), spontaneous, name);
-                        for check = ["firefly_trigger_edge" "firefly_queue_support" "firefly_slide_queue"]
+                        for check = ["firefly_queue_support" "firefly_slide_queue"]
                             testCase.verifyEqual(status(check), pick(spontaneous, "not_needed", "pass"), name);
                         end
                     end
@@ -77,13 +77,13 @@ classdef TestOptionalStreams < matlab.unittest.TestCase
             status = @(id) checks(string({checks.id}) == id).status;
             testCase.verifyEqual(status("device_stage"), "not_needed");
             testCase.verifyEqual(status("scan_calibration"), "not_needed");
-            testCase.verifyTrue(c.Preflight.ok);
+            testCase.verifyTrue(c.Preflight.can_run);
             % With drift correction the stage is needed again.
             cfg.spontaneous.drift_correction = true;
             c.setConfig(cfg);
             c.runPreflight();
             checks = c.Preflight.checks;
-            testCase.verifyEqual(checks(string({checks.id}) == "device_stage").status, "fail");
+            testCase.verifyEqual(checks(string({checks.id}) == "device_stage").status, "blocker");
         end
 
         function encoderLinesThatCannotBeRecordedAreRefused(testCase)
@@ -96,7 +96,7 @@ classdef TestOptionalStreams < matlab.unittest.TestCase
             daq.wfm_data.di = struct("name", "photodiode", "port", "Dev1/port0/line10");
             c.runPreflight();
             check = c.Preflight.checks(string({c.Preflight.checks.id}) == "wheel_encoder");
-            testCase.verifyEqual(check.status, "fail");
+            testCase.verifyEqual(check.status, "blocker");
             testCase.verifySubstring(check.message, "cameraTrigger");
             testCase.verifySubstring(check.message, """photodiode""");
             % The setting itself is checked when it is set.

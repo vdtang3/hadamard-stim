@@ -51,7 +51,7 @@ classdef TestController < matlab.unittest.TestCase
             testCase.verifyEmpty(intersect(fieldnames(c.Reference.acquisitions), ["waveform" "image"]));
         end
 
-        function realHardwareNeedsTheFireflyChecks(testCase)
+        function realHardwareWithoutTheFireflyChecksNeedsAnOverride(testCase)
             [c, cfg, ref] = testCase.session();
             c.Env.context.simulated = false;
             c.setConfig(cfg);
@@ -61,13 +61,16 @@ classdef TestController < matlab.unittest.TestCase
             c.acquireZReference();
             r = hadamard_stim.apply_controller_action(c, "start_run", ...
                 struct("run_folder", testCase.Folder), c.Revision);
-            testCase.verifyEqual(r.identifier, "hadamard_stim:HardwareNotValidated");
-            testCase.verifySubstring(r.message, "driver, trigger_edge, queue_support, slide_queue");
+            testCase.verifyEqual(r.identifier, "hadamard_stim:WarningsNotAcknowledged");
+            testCase.verifySubstring(r.message, "firefly_slide_queue");
+            testCase.verifyFalse(contains(r.message, "firefly_queue_support"), ...
+                "queue support is history: the live driver is asked");
             testCase.verifyFalse(isfolder(testCase.Folder));
 
-            passed = struct("passed", true, "evidence", "test", "date", "2026-10-13");
-            c.Env.context.hardware_validation = struct("driver", passed, ...
-                "trigger_edge", passed, "queue_support", passed, "slide_queue", passed);
+            passed = struct("passed", true, "evidence", "test", ...
+                "date", string(datetime("now", "TimeZone", "UTC", "Format", "yyyy-MM-dd'T'HH:mm:ss'Z'")), ...
+                "provenance", struct("luminos_commit", "unknown"));
+            c.Env.context.hardware_validation = struct("queue_support", passed, "slide_queue", passed);
             r = hadamard_stim.apply_controller_action(c, "start_run", ...
                 struct("run_folder", testCase.Folder), c.Revision);
             testCase.verifyTrue(r.ok, r.message);

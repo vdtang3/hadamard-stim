@@ -25,12 +25,17 @@ classdef FakeAlpDmd < hadamard_stim.testing.FakeLuminosDevice
         ActiveIsPair = true
         refimage = struct("img", zeros(328, 448), "bin", 1)
         ReferenceRoi = [0 0 448 328]   % reference_geometry: [x0 y0 width height]
+        MeasuredUtc = 0                % when calibrated; 0 is "not recorded"
         % What the adapter loaded, as SimulatedRig records it.
         Stack = struct("sha256", "", "size", [0 0 0])
         Queue = []
         QueueSettings = []
         Displaying = "nothing"         % "stack", "queue", "static" or "dark"
         PowerOnEdge = 2009             % ALP_VD_EDGE as Get_State reports it (2009 rising)
+        % As ALP_DMD: 0 when no board is open (the driver failed, or debug
+        % mode); nothing then reports queue support.
+        mexPointer = 1
+        debug_mode = 0
     end
 
     properties (Access = private)
@@ -48,7 +53,7 @@ classdef FakeAlpDmd < hadamard_stim.testing.FakeLuminosDevice
         end
 
         function tf = Supports_Sequence_Queue(obj)
-            tf = obj.SupportsQueue;
+            tf = obj.SupportsQueue && obj.mexPointer ~= 0 && obj.debug_mode == 0;
         end
 
         function state = Get_State(obj)
@@ -160,7 +165,7 @@ classdef FakeAlpDmd < hadamard_stim.testing.FakeLuminosDevice
             end
             identity = struct("status", status, "has_pair_calibration", calibrated, ...
                 "active_transform_is_pair_transform", calibrated && obj.ActiveIsPair, ...
-                "pair_transform", struct("A", eye(3)), "measured_utc", 0, "bin", 1, ...
+                "pair_transform", struct("A", eye(3)), "measured_utc", obj.MeasuredUtc, "bin", 1, ...
                 "roi", obj.ReferenceRoi, "mode", "fake");
         end
 

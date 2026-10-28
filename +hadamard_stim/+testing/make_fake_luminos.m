@@ -5,7 +5,7 @@ function app = make_fake_luminos(datafolder, options)
 %
 %   Devices carry the names in Luminos's Firefly.json, so the adapter finds
 %   them exactly as on the rig: DAQ_Session, Teledyne Kinetix, Grasshopper3,
-%   Blackfly, DMD (shared), NewportTRB25CC and Blue LED 488. The blue
+%   Blackfly, DMD (shared), NewportTRB25CC, Blue LED 488 and Red LED 615. The blue
 %   modulator is calibrated with blue_curve ([volts; power]) when one is
 %   given. Acquisitions run through hadamard_stim.testing.fake_luminos_acquisition.
 arguments
@@ -36,9 +36,14 @@ if ~isempty(options.blue_curve)
     blue.calibration_curve = options.blue_curve;
 end
 
+% The orange LED as Firefly.json has it: Dev1/ao0, 0 to 4.5 V, uncalibrated.
+orange = hadamard_stim.testing.FakeModulator("Red LED 615");
+orange.port = "Dev1/ao0";
+orange.max = 4.5;
+
 devices = {hadamard_stim.testing.FakeLuminosDaq("DAQ_Session"), kinetix, grasshopper, blackfly, ...
     hadamard_stim.testing.FakeAlpDmd("DMD (shared)"), ...
-    hadamard_stim.testing.FakeNewportStage("NewportTRB25CC", options.z_start), blue};
+    hadamard_stim.testing.FakeNewportStage("NewportTRB25CC", options.z_start), blue, orange};
 for k = 1:numel(devices)
     devices{k}.App = app;
 end

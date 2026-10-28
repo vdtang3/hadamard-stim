@@ -23,7 +23,7 @@ masks = hadamard_stim.yitong.static_hadamard_patterns(true(cfg.dmd.size));
 rng(incoming);
 hw.dmd_load_stack(permute(masks, [2 1 3]));
 waveform = hadamard_stim.protocol.scan_waveform(cfg, c.waveform_period_ms, c.orange_v, ...
-    size(masks, 3), c.repeats);
+    size(masks, 3), c.repeats, camera_rows=hw.camera_rows());
 acquisitions = cell(1, c.n_recordings);
 for k = 1:c.n_recordings
     hadamard_stim.protocol.report_phase(env, "calibration_scan", ...

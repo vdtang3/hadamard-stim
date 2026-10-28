@@ -6,8 +6,9 @@ function [c, app, cfg, inputs] = tab_session(folder, options)
 %   A HadamardStimController on a LuminosBackend (the Hadamard_Stim
 %   device's construction) over hadamard_stim.testing.make_fake_luminos,
 %   with his blue curve. The backend's settings carry blue_threshold 15
-%   and a hardware validation file in folder recording the four Firefly
-%   checks (passed when validated). The configuration is the parity one;
+%   and a hardware validation file in folder recording the two DMD
+%   commissioning checks (passed when validated), recorded today with provenance that
+%   names no commit (so none is compared). The configuration is the parity one;
 %   nothing has been sent to the controller yet. Scans reconstruct from
 %   synthetic calibration movies until use_parity_scans is called after
 %   prepare_rig.
@@ -20,9 +21,11 @@ if ~isfolder(folder)
 end
 [app, cfg, inputs] = fake_firefly(folder);
 validation_file = fullfile(folder, "firefly_checks.json");
-check = struct("passed", options.validated, "evidence", "test", "date", "2026-10-14");
-write_text(validation_file, jsonencode(struct("driver", check, "trigger_edge", check, ...
-    "queue_support", check, "slide_queue", check)));
+check = struct("passed", options.validated, "evidence", "test", ...
+    "date", string(datetime("now", "TimeZone", "UTC", "Format", "yyyy-MM-dd'T'HH:mm:ss'Z'")), ...
+    "details", struct("trigger_edge", "rising"), ...
+    "provenance", struct("hadamard_stim_commit", "unknown", "luminos_commit", "unknown", "dmd_serial", "unknown"));
+write_text(validation_file, jsonencode(struct("queue_support", check, "slide_queue", check)));
 rng(3, "twister");
 calibration = uint16(100 + randi(500, 16, 600, 64));
 backend = hadamard_stim.luminos.LuminosBackend(app, blue_threshold=15, ...

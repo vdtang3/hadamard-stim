@@ -27,7 +27,7 @@ zAll = linspace(Z0,Z1,nZ+1);
 masks = hadamard_stim.yitong.static_hadamard_patterns(true(cfg.dmd.size));
 hw.dmd_load_stack(permute(masks, [2 1 3]));
 waveform = hadamard_stim.protocol.scan_waveform(cfg, cfg.scan.waveform_period_ms, ...
-    cfg.scan.orange_v, size(masks, 3));
+    cfg.scan.orange_v, size(masks, 3), camera_rows=hw.camera_rows());
 
 prefix = cfg.naming.prefix + "_" + cfg.z_reference.label + "_";
 acquisitions = cell(1, nZ + 1);

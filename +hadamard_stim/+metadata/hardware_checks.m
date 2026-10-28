@@ -1,13 +1,17 @@
 function names = hardware_checks(session_mode)
-%HARDWARE_CHECKS The Firefly checks a session mode needs recorded as passed.
+%HARDWARE_CHECKS The recorded Firefly checks that are evidence for a session mode.
 %
 %   names = hadamard_stim.metadata.hardware_checks(session_mode)
 %
-%   connectivity  driver, trigger_edge, queue_support, slide_queue
-%   spontaneous   driver (a static mask: no queue, no DMD triggers)
+%   connectivity  slide_queue (queue_support is history: the live driver
+%                 is asked at every preflight)
+%   spontaneous   none (a static mask: no queue, no DMD triggers)
+%
+%   The driver probe and the power-on trigger edge are not readiness
+%   (hardware_gate).
 if session_mode == "spontaneous"
-    names = "driver";
+    names = strings(1, 0);
 else
-    names = ["driver" "trigger_edge" "queue_support" "slide_queue"];
+    names = "slide_queue";
 end
 end

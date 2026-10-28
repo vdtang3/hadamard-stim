@@ -28,6 +28,17 @@ classdef HadamardStimController < handle
     %   A stopped, failed or aborted run resumes from its folder's checkpoint.
     %   The rig is released before any of those last four is reported.
     %
+    %   Readiness (getState().readiness, metadata.readiness_report): every
+    %   check is a pass, info, warning or blocker. Blockers (impossible,
+    %   undefined, or a hardware conflict) refuse an action outright.
+    %   Warnings (a scientific or data-quality risk: a calibration that does
+    %   not fit the current settings, queue playback not verified on a
+    %   slide, settings that differ from Yitong's) never stop setup; age
+    %   alone is never one; a run or resume starts with them
+    %   only when the operator acknowledges all of them at once
+    %   (AcknowledgedWarnings), and the run's recipe (or the resume record)
+    %   keeps what was acknowledged.
+    %
     %   The configuration's session.mode decides what a run is: the
     %   connectivity protocol (run_protocol, trials) or spontaneous imaging
     %   (run_spontaneous, blocks). Everything else (setup, the rig, records,
@@ -64,6 +75,9 @@ classdef HadamardStimController < handle
         LastResume = []        % the last resume's record (write_resume_record)
         RunStarted = NaT
         RunEnded = NaT
+        % The orange preview while it is on (startOrangePreview): what is
+        % shown and at what level; [] when off.
+        OrangePreview = []
     end
 
     properties
@@ -92,12 +106,21 @@ classdef HadamardStimController < handle
             obj.Config = hadamard_stim.default_config();
         end
 
+        function delete(obj)
+            % A controller that goes away leaves no mask and no orange light.
+            try
+                obj.stopOrangePreview();
+            catch
+            end
+        end
+
         % ---- Setup ------------------------------------------------------
 
         function setConfig(obj, cfg)
             obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED" "CELLS_APPROVED" "READY"]);
             obj.Config = cfg;
-            obj.bump();
+            changed = onCleanup(@() obj.bump());
+            obj.followOrangeStart();
         end
 
         function updateConfig(obj, changes)
@@ -109,6 +132,7 @@ classdef HadamardStimController < handle
         function setRigSettings(obj, changes)
             obj.requireBackend();
             obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED"]);
+            obj.stopOrangePreview();
             obj.Backend.set_settings(changes);
             % The environment was built with the old settings.
             obj.Env = struct();
@@ -121,7 +145,8 @@ classdef HadamardStimController < handle
 
         function runPreflight(obj)
             % Read only: nothing on the rig or in the session changes except
-            % the stored report.
+            % the stored report. getState().readiness combines it with the
+            % configuration and the field of view's setup.
             obj.requireBackend();
             if obj.LifecycleState == "RUNNING" || obj.Activity ~= ""
                 error("hadamard_stim:NotLegal", "Not possible while %s.", lower(obj.LifecycleState));
@@ -134,6 +159,7 @@ classdef HadamardStimController < handle
             % and the LuminosRig a run will use.
             obj.requireBackend();
             obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED"]);
+            obj.stopOrangePreview();
             obj.during("preparing", @() obj.prepareBody());
         end
 
@@ -144,7 +170,23 @@ classdef HadamardStimController < handle
             % prepared with the old ones is dropped, with any proposal.
             obj.requireBackend();
             obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED"]);
+            obj.stopOrangePreview();
             obj.during("calibrating", @() obj.calibrationBody());
+        end
+
+        function runCommissioningCheck(obj, name)
+            % Run one Firefly check that the tab can run (queue_support,
+            % slide_queue on a uniform slide) and record it in the hardware
+            % validation file. A check is evidence about the rig, kept until
+            % it is run again; it is not a step of every session.
+            arguments
+                obj
+                name (1, 1) string
+            end
+            obj.requireBackend();
+            obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED"]);
+            obj.stopOrangePreview();
+            obj.during("commissioning", @() obj.commissioningBody(name));
         end
 
         function calibrateBlueLed(obj)
@@ -153,22 +195,26 @@ classdef HadamardStimController < handle
             % prepared with the old one is dropped, with any proposal.
             obj.requireBackend();
             obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED"]);
+            obj.stopOrangePreview();
             obj.during("calibrating_blue", @() obj.blueCalibrationBody());
         end
 
         function acquireReferenceImage(obj)
             obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED"]);
+            obj.stopOrangePreview();
             obj.requireEnvironment();
             obj.during("scanning", @() obj.referenceBody());
         end
 
         function setReferenceImage(obj, im)
             obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED"]);
+            obj.stopOrangePreview();
             obj.adoptReferenceImage(im, struct("kind", "provided", "folder", ""));
         end
 
         function proposeCells(obj)
             obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED"]);
+            obj.stopOrangePreview();
             if isempty(obj.ReferenceImage)
                 error("hadamard_stim:NoReferenceImage", "Set the reference image before segmenting.");
             end
@@ -178,6 +224,7 @@ classdef HadamardStimController < handle
 
         function approveCells(obj)
             obj.assertIdle("CELLS_PROPOSED");
+            obj.stopOrangePreview();
             obj.Cells = obj.Proposal;
             obj.LifecycleState = "CELLS_APPROVED";
             if ~needs_z_stack(obj.Config)
@@ -192,6 +239,7 @@ classdef HadamardStimController < handle
 
         function acquireZReference(obj)
             obj.assertIdle(["CELLS_APPROVED" "READY"]);
+            obj.stopOrangePreview();
             obj.requireEnvironment();
             obj.during("z_reference", @() obj.zReferenceBody());
         end
@@ -202,6 +250,7 @@ classdef HadamardStimController < handle
             if ismember(obj.LifecycleState, ["CONFIGURING" "RUNNING"]) || obj.Activity ~= ""
                 error("hadamard_stim:NotLegal", "Not possible while the session is %s.", obj.LifecycleState);
             end
+            obj.stopOrangePreview();
             obj.Proposal = [];
             obj.Cells = [];
             obj.ReferenceImage = [];
@@ -222,12 +271,70 @@ classdef HadamardStimController < handle
             obj.bump();
         end
 
+        % ---- Orange preview -------------------------------------------
+
+        function startOrangePreview(obj)
+            % Show the approved cells' orange illumination mask (Cells.
+            % illum_mask, exactly what the trials use) on the DMD, and hold
+            % the orange LED at stimulation.orange_start_v, so the operator
+            % can choose that voltage on Luminos's live image. Nothing is
+            % acquired and nothing in the session changes. It is a hardware
+            % session like any other (begin/release): every other rig or
+            % field-of-view operation, and a new session, ends it first;
+            % stopOrangePreview turns the LED off, blanks the DMD and
+            % releases it. Changing orange_start_v while it is on moves the
+            % LED (setConfig).
+            obj.requireBackend();
+            obj.assertIdle(["CELLS_APPROVED" "READY"]);
+            obj.requireEnvironment();
+            if isempty(obj.Cells) || ~isfield(obj.Cells, "illum_mask")
+                error("hadamard_stim:NoCells", "Approve the cells first: the preview shows their illumination mask.");
+            end
+            if ~ismethod(obj.Env.hw, "orange_preview")
+                error("hadamard_stim:NoOrangePreview", "This rig cannot show an orange preview.");
+            end
+            obj.stopOrangePreview();
+            % Held on purpose: the session outlives this call, and
+            % stopOrangePreview releases it.
+            obj.holdHardware();
+            volts = obj.orangeStart();
+            try
+                obj.Env.hw.orange_preview(obj.Cells.illum_mask, volts);
+            catch err
+                obj.releaseHardware();
+                rethrow(err);
+            end
+            obj.OrangePreview = struct("started_utc", utc_text(datetime("now", "TimeZone", "UTC")), ...
+                "orange_v", volts, "n_cells", size(obj.Cells.cell_coord, 1), ...
+                "mask_sha256", hadamard_stim.metadata.sha256(obj.Cells.illum_mask));
+            obj.bump();
+            obj.notifyStatus();
+        end
+
+        function stopOrangePreview(obj)
+            % Safe to call at any time, any number of times.
+            if isempty(obj.OrangePreview)
+                return
+            end
+            obj.OrangePreview = [];
+            obj.releaseHardware();
+            obj.bump();
+            obj.notifyStatus();
+        end
+
         % ---- Running ----------------------------------------------------
 
-        function startRun(obj, run_folder)
+        function startRun(obj, run_folder, options)
+            % Start a run. Blockers refuse it. Warnings refuse it until each
+            % one is acknowledged (AcknowledgedWarnings, the warnings' ids:
+            % the tab's single "Continue anyway"); the acknowledged warnings
+            % and the operator's note are recorded in the recipe
+            % (start_override). Without warnings nothing is recorded there.
             arguments
                 obj
                 run_folder (1, 1) string = ""
+                options.AcknowledgedWarnings string = strings(1, 0)
+                options.OperatorNote (1, 1) string = ""
             end
             obj.assertIdle("READY");
             report = hadamard_stim.validate_config(obj.Config);
@@ -235,8 +342,10 @@ classdef HadamardStimController < handle
                 error("hadamard_stim:InvalidConfig", "The configuration cannot run:\n  %s", ...
                     strjoin(report.errors, newline + "  "));
             end
-            obj.assertHardwareValidated();
             obj.assertReadyFor(obj.Config);
+            readiness = obj.checkNow(obj.Config, "start");
+            override = acknowledged(readiness, options.AcknowledgedWarnings, options.OperatorNote, ...
+                "start_run with acknowledged_warnings, or startRun(..., AcknowledgedWarnings=ids)");
             if strlength(run_folder) == 0
                 obj.requireBackend();
                 run_folder = obj.Backend.default_run_folder(obj.Config);
@@ -248,7 +357,7 @@ classdef HadamardStimController < handle
             end
             % Checked before the run folder exists, so a refused run leaves nothing.
             session = obj.beginHardware(); %#ok<NASGU>
-            [recipe, arrays] = hadamard_stim.metadata.build_recipe(obj.Config, state, obj.Env.context);
+            [recipe, arrays] = hadamard_stim.metadata.build_recipe(obj.Config, state, obj.Env.context, override);
             hadamard_stim.metadata.write_recipe(run_folder, recipe, arrays);
             obj.RunFolder = run_folder;
             obj.RecipeHash = recipe.recipe_hash;
@@ -257,16 +366,23 @@ classdef HadamardStimController < handle
         end
 
         function resumeRun(obj, run_folder, options)
-            % Continue a run from its checkpoint. If the blue or DMD
-            % calibration prepared now differs from the one the run
-            % recorded, the resume stops with hadamard_stim:CalibrationChanged
-            % (both identities and the consequence in its message) unless
-            % ContinueWithChangedCalibration is true; the override is
-            % recorded in the run's resumes/ folder.
+            % Continue a run from its checkpoint, through the same readiness
+            % as a start: blockers refuse; warnings about the rig now, and a
+            % blue or DMD calibration that differs from the one the run
+            % recorded, need acknowledging. A changed calibration alone
+            % stops with hadamard_stim:CalibrationChanged (both identities
+            % and the consequence in its message) unless
+            % ContinueWithChangedCalibration is true or its warnings are
+            % among AcknowledgedWarnings. The configuration's deviations
+            % were acknowledged when the run started and are not asked
+            % again. What was acknowledged is recorded in the run's
+            % resumes/ folder.
             arguments
                 obj
                 run_folder (1, 1) string = ""
                 options.ContinueWithChangedCalibration (1, 1) logical = false
+                options.AcknowledgedWarnings string = strings(1, 0)
+                options.OperatorNote (1, 1) string = ""
             end
             obj.assertIdle(["CONFIGURING" "READY" "STOPPED" "FAILED" "ABORTED"]);
             obj.requireEnvironment();
@@ -277,20 +393,30 @@ classdef HadamardStimController < handle
                 error("hadamard_stim:NoRunFolder", "Name the run folder to resume.");
             end
             [recipe, ~] = hadamard_stim.metadata.read_recipe(run_folder);
-            obj.assertHardwareValidated(recipe.config);
             state = hadamard_stim.metadata.load_checkpoint(run_folder);
             comparison = hadamard_stim.metadata.calibration_comparison(recipe, obj.Env.context);
-            if comparison.changed && ~options.ContinueWithChangedCalibration
+            readiness = obj.checkNow(recipe.config, "resume", comparison);
+            changed = ["calibration_changed_blue" "calibration_changed_geometry"];
+            ack = options.AcknowledgedWarnings;
+            if options.ContinueWithChangedCalibration
+                ack = [reshape(ack, 1, []) changed];
+            end
+            unacknowledged = setdiff(string({readiness.warnings.id}), ack);
+            if ~isempty(unacknowledged) && all(ismember(unacknowledged, changed))
                 error("hadamard_stim:CalibrationChanged", "%s", calibration_change_message(comparison));
             end
+            override = acknowledged(readiness, ack, options.OperatorNote, ...
+                "resume_run with acknowledged_warnings, or resumeRun(..., AcknowledgedWarnings=ids)");
             obj.Config = recipe.config;
             session = obj.beginHardware(); %#ok<NASGU>
             position = next_position(state);
+            % Reaching here on a changed calibration means it was acknowledged.
             file = hadamard_stim.metadata.write_resume_record(run_folder, recipe.recipe_hash, ...
-                position, comparison, options.ContinueWithChangedCalibration);
+                position, comparison, comparison.changed, override);
             obj.LastResume = struct("record", string(file), "position", position, ...
                 "calibration_changed", comparison.changed, ...
-                "continued_with_changed_calibration", comparison.changed && options.ContinueWithChangedCalibration);
+                "continued_with_changed_calibration", comparison.changed, ...
+                "operator_override", ~isempty(override));
             obj.Cells = state.cells.canonical;
             obj.Reference = state.reference;
             obj.RunFolder = run_folder;
@@ -310,6 +436,10 @@ classdef HadamardStimController < handle
         function requestAbort(obj)
             % Abandon what the rig is doing now. The trial in progress is not
             % recorded, so a resume repeats it from the last checkpoint.
+            if ~isempty(obj.OrangePreview) && obj.Activity == ""
+                obj.stopOrangePreview();
+                return
+            end
             if ~ismember(obj.Activity, ["running" "z_reference" "scanning" "calibrating"])
                 error("hadamard_stim:NotRunning", "Nothing is running on the rig.");
             end
@@ -411,7 +541,13 @@ classdef HadamardStimController < handle
                 state.calibration_scans = struct("taken_utc", r.taken_utc, ...
                     "folders", r.folders, "camera_roi", r.camera.roi, "label", r.settings.label);
             end
+            state.orange_preview = obj.OrangePreview;
+            state.imaging_camera = [];
+            if ~isempty(obj.Backend)
+                state.imaging_camera = obj.Backend.imaging_camera();
+            end
             state.preflight = obj.Preflight;
+            state.readiness = obj.readiness(obj.Config);
             state.calibration = obj.calibrationStatus();
         end
 
@@ -429,6 +565,7 @@ classdef HadamardStimController < handle
             legal.prepare_rig = backend && early;
             legal.acquire_calibration_scans = backend && early;
             legal.calibrate_blue_led = backend && early;
+            legal.run_commissioning_check = backend && early;
             legal.acquire_reference_image = env && early;
             legal.set_reference_image = early;
             legal.propose_cells = early && env && ~isempty(obj.ReferenceImage);
@@ -439,6 +576,10 @@ classdef HadamardStimController < handle
             legal.stop_after_current = s == "RUNNING" && ~obj.StopRequested;
             legal.abort = ismember(obj.Activity, ["running" "z_reference" "scanning" "calibrating"]) && ~obj.AbortRequested;
             legal.new_session = idle && ~ismember(s, ["CONFIGURING" "RUNNING"]);
+            previewing = ~isempty(obj.OrangePreview);
+            legal.start_orange_preview = backend && env && idle && ~previewing ...
+                && ismember(s, ["CELLS_APPROVED" "READY"]) && ~isempty(obj.Cells);
+            legal.stop_orange_preview = previewing;
         end
 
         function tf = hasEnvironment(obj)
@@ -561,19 +702,26 @@ classdef HadamardStimController < handle
         end
 
         function preflightBody(obj)
-            report = obj.Backend.preflight(obj.Config);
-            config = hadamard_stim.validate_config(obj.Config);
-            first = struct("id", "config", "label", "The configuration is complete", ...
-                "status", "pass", "message", "");
-            if ~config.ok
-                first.status = "fail";
-                first.message = strjoin(config.errors, " ");
-            end
-            checks = [first, reshape(report.checks, 1, [])];
-            failed = checks([checks.status] == "fail");
-            obj.Preflight = struct("ok", isempty(failed), "checked_utc", utc_text(datetime("now", "TimeZone", "UTC")), ...
+            obj.storePreflight(obj.Backend.preflight(obj.Config));
+        end
+
+        function storePreflight(obj, report)
+            % The rig's part of readiness, as last read (getState shows it
+            % with the configuration's and the session's own checks).
+            obj.Preflight = struct("can_run", report.can_run, ...
+                "checked_utc", utc_text(datetime("now", "TimeZone", "UTC")), ...
                 "config_sha256", hadamard_stim.metadata.sha256(unicode2native(jsonencode(obj.Config), "UTF-8")), ...
-                "checks", checks, "calibration", report.calibration);
+                "checks", report.checks, "calibration", report.calibration);
+        end
+
+        function commissioningBody(obj, name)
+            obj.Backend.run_commissioning_check(name, obj.Config);
+            % Read the rig again, so readiness shows the new record.
+            obj.Preflight = [];
+            try
+                obj.storePreflight(obj.Backend.preflight(obj.Config));
+            catch
+            end
         end
 
         function calibrationBody(obj)
@@ -677,17 +825,108 @@ classdef HadamardStimController < handle
 
         % ---- Hardware sessions --------------------------------------------
 
-        function assertHardwareValidated(obj, cfg)
-            if nargin < 2
-                cfg = obj.Config;
+        function report = readiness(obj, cfg, purpose, comparison)
+            % Every readiness item an action of this purpose depends on:
+            %   "state"   what getState shows: the last preflight, the
+            %             configuration and the field of view's setup
+            %   "start"   the same, with a fresh preflight (startRun)
+            %   "resume"  a fresh preflight, the calibrations against the
+            %             run's (comparison); not the configuration's
+            %             deviations nor the field of view, which the
+            %             checkpoint carries
+            % Without a backend the rig's checks are the recorded Firefly
+            % checks in the environment's context.
+            arguments
+                obj
+                cfg struct
+                purpose (1, 1) string = "state"
+                comparison = []
             end
-            gate = hadamard_stim.metadata.hardware_gate(obj.Env.context, ...
-                hadamard_stim.metadata.session_mode(cfg));
-            if ~gate.ok
-                error("hadamard_stim:HardwareNotValidated", ...
-                    ['Firefly has not passed the checks a real acquisition needs: %s. ' ...
-                     'Run them (docs/notebook.md, Phase 2 rig checks) and record the results.'], ...
-                    strjoin(gate.missing, ", "));
+            items = hadamard_stim.metadata.readiness_report(struct([])).checks;
+            if purpose ~= "resume"
+                items = [items config_items(cfg)];
+            end
+            if ~isempty(obj.Backend)
+                if purpose == "state"
+                    if isempty(obj.Preflight)
+                        items(end+1) = hadamard_stim.metadata.readiness_item("preflight", ...
+                            "Rig readiness", "info", group="rig", ...
+                            message="Not checked yet: Check readiness reads the rig (it changes nothing).");
+                    else
+                        items = [items reshape(obj.Preflight.checks, 1, [])];
+                    end
+                else
+                    report = obj.Backend.preflight(cfg);
+                    obj.storePreflight(report);
+                    items = [items reshape(report.checks, 1, [])];
+                end
+            elseif isfield(obj.Env, "context")
+                context = obj.Env.context;
+                current = struct("trigger_edge", string(cfg.dmd.trigger_edge));
+                if isfield(context, "luminos") && isfield(context.luminos, "commit")
+                    current.luminos_commit = string(context.luminos.commit);
+                end
+                gate = hadamard_stim.metadata.hardware_gate(context, ...
+                    hadamard_stim.metadata.session_mode(cfg), current);
+                items = [items reshape(gate.items, 1, [])];
+            end
+            if purpose == "resume"
+                items = [items calibration_change_items(comparison)];
+            else
+                items = [items obj.setupItems(cfg)];
+            end
+            report = hadamard_stim.metadata.readiness_report(items);
+        end
+
+        function report = checkNow(obj, cfg, purpose, comparison)
+            % A fresh readiness for starting or resuming; refuses on blockers.
+            if nargin < 4
+                comparison = [];
+            end
+            report = obj.readiness(cfg, purpose, comparison);
+            obj.bump();
+            if ~report.can_run
+                error("hadamard_stim:HardwareNotReady", ...
+                    "The rig cannot run this configuration:\n  %s", ...
+                    strjoin(report.failures, newline + "  "));
+            end
+        end
+
+        function items = setupItems(obj, cfg)
+            % The field of view's setup, as far as a run needs it.
+            items = hadamard_stim.metadata.readiness_report(struct([])).checks;
+            item = @(id, label, status, message) hadamard_stim.metadata.readiness_item( ...
+                id, label, status, group="fov", message=message);
+            % Preparing is the rig's (Rig readiness), not a step of the field of view.
+            prepared = @(status, message) hadamard_stim.metadata.readiness_item( ...
+                "rig_prepared", "Rig prepared", status, group="rig", message=message);
+            if ~isempty(obj.Backend)
+                if obj.hasEnvironment()
+                    items(end+1) = prepared("pass", "Prepared " + string(obj.Prepared.utc) + ".");
+                else
+                    items(end+1) = prepared("blocker", ...
+                        "Not prepared: Prepare rig builds the calibrations and geometry a run uses.");
+                end
+            end
+            if isempty(obj.Cells)
+                items(end+1) = item("cells", "Cells approved", "blocker", ...
+                    "No approved cells: take the reference image, segment and approve.");
+            else
+                items(end+1) = item("cells", "Cells approved", "pass", ...
+                    sprintf("%d cells.", size(obj.Cells.cell_coord, 1)));
+            end
+            if needs_z_stack(cfg)
+                if obj.hasZStackFor(cfg)
+                    items(end+1) = item("z_reference", "Z reference", "pass", "Acquired.");
+                else
+                    items(end+1) = item("z_reference", "Z reference", "blocker", ...
+                        "Not acquired: drift correction compares each scan with the reference z-stack.");
+                end
+            end
+            if ~is_spontaneous(cfg) && obj.hasEnvironment() ...
+                    && (~isfield(obj.Env, "blue_calibration") || isempty(obj.Env.blue_calibration))
+                items(end+1) = item("blue_prepared", "Blue calibration prepared", "blocker", ...
+                    "The rig was prepared without a usable blue calibration (as a spontaneous session); prepare it again.");
             end
         end
 
@@ -696,14 +935,55 @@ classdef HadamardStimController < handle
             % configuration, otherwise return a guard that releases the rig
             % however the caller exits. Callers that report an outcome
             % release first (releaseHardware), which makes the guard a no-op.
+            obj.holdHardware();
+            session = onCleanup(@() obj.releaseHardware());
+        end
+
+        function holdHardware(obj)
+            % Begin a session of hardware use and hold it until
+            % releaseHardware. Only blockers refuse (released first):
+            % warnings were acknowledged (a run) or are shown without
+            % stopping setup (reference scan, z-reference, preview).
             obj.AbortRequested = false;
+            obj.stopOrangePreview();   % nothing else uses the rig while it is shown
             report = obj.Env.hw.begin(obj.Config);
             obj.HardwareHeld = true;
-            session = onCleanup(@() obj.releaseHardware());
-            if ~report.ok
+            if ~report.can_run
+                obj.releaseHardware();
                 error("hadamard_stim:HardwareNotReady", ...
                     "The rig cannot run this configuration:\n  %s", ...
                     strjoin(report.failures, newline + "  "));
+            end
+        end
+
+        function volts = orangeStart(obj)
+            % The preview's orange level: stimulation.orange_start_v, or 0 V
+            % (LED off) while it is not set yet.
+            volts = 0;
+            v = obj.Config.stimulation.orange_start_v;
+            if isnumeric(v) && isscalar(v) && isfinite(v)
+                volts = double(v);
+            end
+        end
+
+        function followOrangeStart(obj)
+            % While the preview is on, the LED follows orange_start_v. A
+            % value the LED cannot take ends the preview (LED off, DMD
+            % dark) rather than leave the old level lit.
+            if isempty(obj.OrangePreview)
+                return
+            end
+            volts = obj.orangeStart();
+            if volts == obj.OrangePreview.orange_v
+                return
+            end
+            try
+                obj.Env.hw.set_orange_level(volts);
+                obj.OrangePreview.orange_v = volts;
+            catch err
+                obj.stopOrangePreview();
+                error("hadamard_stim:OrangePreviewStopped", ...
+                    "The configuration was changed, and the orange preview stopped: %s", err.message);
             end
         end
 
@@ -825,7 +1105,7 @@ classdef HadamardStimController < handle
             end
             gate = hadamard_stim.metadata.hardware_gate(context, ...
                 hadamard_stim.metadata.session_mode(obj.Config));
-            s.hardware_gate = struct("ok", gate.ok, "missing", gate.missing);
+            s.hardware_gate = struct("all_passed", gate.all_passed, "missing", gate.missing);
         end
 
         function c = calibrationStatus(obj)
@@ -935,5 +1215,97 @@ if isfield(state, "next_block")
     position = struct("next_block", state.next_block);
 else
     position = struct("next_trial", state.next_trial);
+end
+end
+
+function items = config_items(cfg)
+% The configuration's part of readiness: what cannot run (blocker), how it
+% differs from Yitong's settings (one warning for all of them) and how the
+% session differs from his collection without changing what it measures
+% (a note).
+report = hadamard_stim.validate_config(cfg);
+items = hadamard_stim.metadata.readiness_report(struct([])).checks;
+if ~report.ok
+    items(end+1) = hadamard_stim.metadata.readiness_item("config", "Configuration", "blocker", ...
+        group="session", message=strjoin(report.errors, " "), ...
+        consequence="The acquisition is not defined until these are fixed.");
+else
+    items(end+1) = hadamard_stim.metadata.readiness_item("config", "Configuration", "pass", ...
+        group="session", message="Complete.");
+end
+if ~isempty(report.deviations)
+    paths = string({report.deviations.path});
+    items(end+1) = hadamard_stim.metadata.readiness_item("config_deviations", ...
+        "Settings differ from Yitong's", "warning", group="session", ...
+        message=sprintf("%d setting%s differ%s from his: %s.", numel(paths), ...
+            plural(numel(paths)), singular_verb(numel(paths)), strjoin(paths, ", ")), ...
+        consequence="The run is recorded as modified, not Yitong-compatible: its data are not directly comparable with his.", ...
+        details=struct("deviations", report.deviations));
+end
+if ~isempty(report.warnings)
+    items(end+1) = hadamard_stim.metadata.readiness_item("session_streams", ...
+        "Differences from his collection", "info", group="session", ...
+        message=strjoin(report.warnings, " "));
+end
+end
+
+function items = calibration_change_items(comparison)
+% A calibration that changed since the run started, as warnings.
+items = hadamard_stim.metadata.readiness_report(struct([])).checks;
+if isempty(comparison)
+    return
+end
+sides = struct("blue", "Blue calibration changed since the run started", ...
+    "geometry", "DMD calibration changed since the run started");
+k = 0;
+for name = ["blue" "geometry"]
+    if isequal(comparison.(name).matches, false)
+        k = k + 1;
+        id = "calibration_changed_blue";
+        if name == "geometry"
+            id = "calibration_changed_geometry";
+        end
+        items(end+1) = hadamard_stim.metadata.readiness_item(id, sides.(name), "warning", ...
+            group="calibration", message="Recorded: " + brief(comparison.(name).recorded) + ...
+            ". Current: " + brief(comparison.(name).current) + ".", ...
+            consequence=comparison.consequence(k), ...
+            details=struct("recorded", comparison.(name).recorded, "current", comparison.(name).current)); %#ok<AGROW>
+    end
+end
+end
+
+function override = acknowledged(readiness, ids, note, how)
+% The warnings a run or resume goes ahead with, once every one has been
+% acknowledged; [] when there were none. Refuses, listing them, otherwise.
+override = [];
+if isempty(readiness.warnings)
+    return
+end
+pending = readiness.warnings(~ismember(string({readiness.warnings.id}), ids));
+if ~isempty(pending)
+    lines = "These warnings have not been acknowledged:";
+    for w = pending
+        lines(end+1) = "  " + w.id + ": " + w.label + ". " + w.message + " " + w.consequence; %#ok<AGROW>
+    end
+    lines(end+1) = "To go ahead anyway, acknowledge them (" + how + "); the override is recorded.";
+    error("hadamard_stim:WarningsNotAcknowledged", "%s", strjoin(lines, newline));
+end
+warnings = rmfield(readiness.warnings, ["severity" "overrideable" "group"]);
+override = struct("operator_override", true, ...
+    "acknowledged_utc", utc_text(datetime("now", "TimeZone", "UTC")), ...
+    "operator_note", note, "warnings", warnings);
+end
+
+function s = plural(n)
+s = "s";
+if n == 1
+    s = "";
+end
+end
+
+function s = singular_verb(n)
+s = "";
+if n == 1
+    s = "s";
 end
 end

@@ -9,7 +9,8 @@ classdef LuminosRig < handle
     %   the experiment does; every sample, mask, repeat count, stage target
     %   and frame count comes from +protocol.
     %
-    %   begin(cfg)            preflight (read only); refuses with every failure
+    %   begin(cfg)            preflight (read only); refuses on any blocker,
+    %                         returning the report (warnings do not refuse)
     %   motor_position()      stage.Get_Current_Position(), in mm
     %   motor_move_to(z)      stage.Move_To_Position(z), blocking
     %   dmd_load_stack(m)     pattern_stack + Write_Stack('slave'), owned
@@ -90,7 +91,7 @@ classdef LuminosRig < handle
             report = hadamard_stim.luminos.preflight(obj.App, cfg, ...
                 blue_threshold=obj.Options.blue_threshold, profile=obj.Profile, ...
                 wheel_encoder_lines=obj.Options.wheel_encoder_lines, purpose=purpose);
-            if ~report.ok
+            if ~report.can_run
                 return
             end
             obj.Devices = report.devices;
@@ -119,6 +120,12 @@ classdef LuminosRig < handle
 
             if j.acquiring
                 attempt("abort_acquisition", @() obj.abortIfActive());
+            end
+            % The orange LED goes off before the DMD is blanked (as
+            % Adaptive Optopatch's cleanup does): never light on a stale
+            % mask, and never a static level left on ao0.
+            if j.orange_set
+                attempt("orange_off", @() set_level(j.orange, 0));
             end
             for k = numel(j.cameras):-1:1
                 c = j.cameras(k);
@@ -157,6 +164,15 @@ classdef LuminosRig < handle
         end
 
         % ---- Stage ------------------------------------------------------
+
+        function n = camera_rows(obj)
+            % Sensor rows in the imaging camera's acquisition area, as the
+            % Camera tab left it: getROIForAcquisition is [x width y height]
+            % in unbinned sensor pixels, and the Kinetix reads one sensor
+            % row at a time, so binning does not change it.
+            roi = double(obj.device("camera").getROIForAcquisition());
+            n = roi(4);
+        end
 
         function z = motor_position(obj)
             z = double(obj.device("stage").Get_Current_Position());
@@ -220,6 +236,39 @@ classdef LuminosRig < handle
             dmd.Record_Owned_Pattern(obj.Profile.owner);
         end
 
+        % ---- Orange preview (an operator aid, not part of the protocol) --
+
+        function orange_preview(obj, mask, volts)
+            % Show mask (the approved cells' illumination mask, canvas-sized)
+            % continuously and hold the orange LED at volts, so the operator
+            % can choose orange_start_v on the live image. Both are undone
+            % by release(): LED to 0 V, DMD dark, ownership released.
+            obj.dmd_show_mask(mask);
+            obj.set_orange_level(volts);
+        end
+
+        function set_orange_level(obj, volts)
+            % A static level on the orange LED's Luminos modulator (Red LED
+            % 615, Dev1/ao0), within its range; journaled so release()
+            % turns it off.
+            obj.refuseIfAborted("setting the orange LED");
+            if isempty(obj.Devices)
+                error("hadamard_stim:NotBegun", "Call begin(cfg) before using the rig.");
+            end
+            spec = obj.Profile.orange_modulator;
+            modulator = obj.App.getDevice(spec.type, "name", spec.name, "displayWarning", false);
+            if numel(modulator) ~= 1
+                error("hadamard_stim:NoOrangeModulator", "No %s named ""%s"" on this rig.", spec.type, spec.name);
+            end
+            if ~(isscalar(volts) && isfinite(volts) && volts >= modulator.min && volts <= modulator.max)
+                error("hadamard_stim:OrangeOutOfRange", ...
+                    "%s takes %g to %g V; %g V cannot be set.", spec.name, modulator.min, modulator.max, volts);
+            end
+            obj.Journal.orange = modulator;
+            obj.Journal.orange_set = true;
+            set_level(modulator, volts);
+        end
+
         % ---- Acquisition ------------------------------------------------
 
         function acq = acquire(obj, spec)
@@ -246,10 +295,23 @@ classdef LuminosRig < handle
 
             daq = obj.device("daq");
             obj.saveDaq(daq);
+            % Every timing setting is the protocol's, set here: no Waveforms
+            % tab needs to have run. Without one, start from the tab's own
+            % defaults (Luminos DAQ.Default_Global_Props) rather than a
+            % partial struct; the trigger terminal is kept from there.
             gp = obj.Journal.daq.global_props;
+            if ~isstruct(gp) || isempty(gp)
+                gp = daq.Default_Global_Props();
+            end
             gp.rate = obj.DaqRate;
             gp.total_time = n_samples / obj.DaqRate;
+            gp.clock_source = char(obj.Profile.daq_clock_source);
+            gp.daq_master = true;
+            gp.completion_trigger = 'None';
             wf = obj.Journal.daq.wfm_data;
+            if ~isstruct(wf) || isempty(wf)
+                wf = struct("ao", [], "do", [], "ai", [], "di", [], "ctri", []);
+            end
             wf.ao = records.ao;
             wf.do = records.do;
             if ~isempty(records.di)
@@ -257,6 +319,9 @@ classdef LuminosRig < handle
             end
             daq.global_props = gp;
             daq.wfm_data = wf;
+            if isprop(daq, "external_clock_rate")
+                daq.external_clock_rate = [];   % the own clock runs at gp.rate
+            end
             if isprop(daq, "waveforms_built")
                 daq.waveforms_built = false;
             end
@@ -374,7 +439,10 @@ classdef LuminosRig < handle
         function saveDaq(obj, daq)
             if isempty(obj.Journal.daq)
                 obj.Journal.daq = struct("global_props", daq.global_props, ...
-                    "wfm_data", daq.wfm_data);
+                    "wfm_data", daq.wfm_data, "external_clock_rate", []);
+                if isprop(daq, "external_clock_rate")
+                    obj.Journal.daq.external_clock_rate = daq.external_clock_rate;
+                end
             end
         end
 
@@ -392,6 +460,9 @@ classdef LuminosRig < handle
             daq = obj.Devices.daq;
             daq.global_props = saved.global_props;
             daq.wfm_data = saved.wfm_data;
+            if isprop(daq, "external_clock_rate")
+                daq.external_clock_rate = saved.external_clock_rate;
+            end
             if isprop(daq, "waveforms_built")
                 daq.waveforms_built = false;
             end
@@ -461,9 +532,13 @@ function j = empty_journal()
 j = struct("dmd_claimed", false, "dmd_written", false, "queue_loaded", false, ...
     "pattern_stack_saved", false, "pattern_stack", [], "queue", [], ...
     "target_saved", false, "target", [], ...
-    "daq", [], "acquiring", false, ...
+    "daq", [], "acquiring", false, "orange_set", false, "orange", [], ...
     "cameras", struct("device", {}, "frames_requested", {}, ...
         "frametrigger_source", {}, "acquisition_exposuretime", {}));
+end
+
+function set_level(modulator, volts)
+modulator.level = volts;
 end
 
 function restore_camera(c)

@@ -60,10 +60,9 @@ fields = [
     f("drift.exposure_scale", "Drift correction", "Exposure scale", "number", "x", "Times the frame exposure")
     f("bleaching.enabled", "Bleaching", "Compensate bleaching", "boolean", "", "Orange rescaled at each drift correction")
     f("bleaching.n_pix_cell", "Bleaching", "Pixels per cell", "integer", "px", "")
-    f("dmd.trigger_edge", "DMD", "Queue trigger edge", "choice", "", "The board's power-on edge his loader inherited (Firefly check)")
     f("dmd.picture_time_us", "DMD", "Picture time", "number", "us", "")
     ];
-required = ["naming.prefix" "segmentation.n_exclude" "stimulation.orange_start_v" "dmd.trigger_edge"];
+required = ["naming.prefix" "segmentation.n_exclude" "stimulation.orange_start_v"];
 for k = 1:numel(fields)
     fields(k).required = ismember(fields(k).path, required);
 end
@@ -76,6 +75,5 @@ for k = 1:numel(fields)
         fields(k).modes = "spontaneous";
     end
 end
-fields([fields.path] == "dmd.trigger_edge").choices = ["rising" "falling"];
 fields([fields.path] == "session.mode").choices = ["connectivity" "spontaneous"];
 end

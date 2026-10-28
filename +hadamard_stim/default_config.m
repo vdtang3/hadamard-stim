@@ -12,8 +12,11 @@ function cfg = default_config()
 %     segmentation.n_exclude        his answer at the input() prompt (5 for his FOV)
 %     stimulation.orange_start_v    he set orange by hand before the trials;
 %                                   the value was not saved
-%     dmd.trigger_edge              the board's power-on trigger edge, which
-%                                   his loader inherited (Firefly check 2)
+%
+%   dmd.trigger_edge is the edge every queue is loaded on: rising, set
+%   explicitly. His loader never set one and inherited the board's
+%   power-on edge; that difference is a standing deviation
+%   (firefly_profile), and queue playback on a slide verifies rising.
 %
 %   Changing anything else leaves Yitong-compatible mode; validate_config
 %   reports each difference as a deviation.
@@ -42,11 +45,10 @@ cfg.daq.channels = ["cameraTrigger"; "grashopperTrigger"; "dmdTrigger"; ...
     "blueIntensity"; "orangeIntensity"; "redShutter"; "limeShutter"; ...
     "blueShutter"; "piezoTrigger"; "IRVoltage"; "magnetPTrigger"; "magnetNTrigger"];
 
-cfg.camera.rows = 328;               % Kinetix active area rows (rolling-shutter wait)
 
 cfg.dmd.size = [1024 768];           % his mask orientation [L W]; Luminos canvas is the transpose
 cfg.dmd.picture_time_us = 44;
-cfg.dmd.trigger_edge = "";
+cfg.dmd.trigger_edge = "rising";    % explicit; his loader inherited the board's edge
 
 cfg.segmentation.threshold = 320;    % cells to keep
 cfg.segmentation.n_exclude = [];

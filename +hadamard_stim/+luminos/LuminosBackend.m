@@ -15,16 +15,18 @@ classdef LuminosBackend < handle
     %                               are dropped (P2); required, no default
     %     calibration_folders       Luminos acquisition folders holding his
     %                               Hadamard calibration scans ("had_cal")
-    %     hardware_validation_file  JSON recording the four Firefly checks
-    %                               (hardware_gate): {"driver": {"passed":
-    %                               true, "evidence": "...", "date": "..."}, ...}
+    %     hardware_validation_file  JSON recording the DMD commissioning
+    %                               checks (hardware_gate): {"slide_queue":
+    %                               {"passed": true, "evidence": "...",
+    %                               "date": "...", "provenance": {...}}, ...}
     %     run_root                  where new run folders go; empty means
     %                               Luminos's data folder for the day
     %     wheel_encoder_lines       the encoder's A and B digital lines;
     %                               empty means his wiring (firefly_profile)
     %
     %   Options for tests: calibration_movies, acquisition_function,
-    %   blue_calibration_function, profile.
+    %   blue_calibration_function, slide_queue_frame_means, profile,
+    %   dmd_code_changed_function.
 
     properties (SetAccess = private)
         App
@@ -46,6 +48,11 @@ classdef LuminosBackend < handle
                 options.acquisition_function = @Waveform_Camera_Sync_Acquisition
                 % Luminos's slide calibration of a modulator; tests substitute a fake.
                 options.blue_calibration_function = @Calibrate_Modulator_On_Slide
+                % The slide queue check's frame means; empty reads the movie.
+                options.slide_queue_frame_means = []
+                % (then_commit, now_commit) -> [changed, files]: whether
+                % Luminos's DMD code differs; tests substitute a fake.
+                options.dmd_code_changed_function = @hadamard_stim.luminos.dmd_code_changed
                 options.profile struct = hadamard_stim.luminos.firefly_profile()
             end
             obj.App = app;
@@ -116,60 +123,156 @@ classdef LuminosBackend < handle
         end
 
         function report = preflight(obj, cfg)
-            % Read only. Every requirement of a real run, as checks.
-            report = hadamard_stim.luminos.preflight(obj.App, cfg, ...
-                blue_threshold=obj.Settings.blue_threshold, profile=obj.Options.profile, ...
+            % Read only. Every requirement of a real run, as readiness
+            % items (hadamard_stim.metadata.readiness_report): the rig's
+            % (luminos.preflight), the Hadamard calibration scans, the
+            % data folder and the recorded Firefly commissioning checks.
+            profile = obj.Options.profile;
+            rig = hadamard_stim.luminos.preflight(obj.App, cfg, ...
+                blue_threshold=obj.Settings.blue_threshold, profile=profile, ...
                 wheel_encoder_lines=obj.Settings.wheel_encoder_lines);
-            report = rmfield(report, "devices");
-            checks = report.checks;
+            checks = rig.checks;
             mode = hadamard_stim.metadata.session_mode(cfg);
 
-            if mode == "spontaneous"
-                needs_scans = isequal(cfg.spontaneous.drift_correction, true);
-                why_not = "Not needed: drift correction between blocks is off.";
-            else
-                needs_scans = cfg.z_reference.enabled || cfg.drift.enabled;
-                why_not = "Not needed: z-reference and drift correction are off.";
-            end
-            [ok, message] = obj.scanCalibrationReady(needs_scans);
-            checks(end+1) = check("scan_calibration", "His Hadamard calibration scans are named", ok, message);
-            if ~needs_scans
-                checks(end).status = "not_needed";
-                checks(end).message = why_not;
-            end
+            checks(end+1) = obj.scanCalibrationCheck(cfg);
 
             folder = obj.dataRoot();
             [ok, message] = writable(folder);
-            checks(end+1) = check("data_folder", "Acquisition folder is writable", ok, message);
-
-            [validation, message] = obj.hardwareValidation();
-            gate = hadamard_stim.metadata.hardware_gate(struct("hardware_validation", validation));
-            needed = hadamard_stim.metadata.hardware_checks(mode);
-            for name = ["driver" "trigger_edge" "queue_support" "slide_queue"]
-                if ~ismember(name, needed)
-                    checks(end+1) = struct("id", "firefly_" + name, ...
-                        "label", "Firefly check recorded: " + name, "status", "not_needed", ...
-                        "message", "Not needed: spontaneous blocks use no sequence queue or DMD triggers."); %#ok<AGROW>
-                    continue
-                end
-                ok = ~ismember(name, gate.missing);
-                text = message;
-                if ok
-                    text = sprintf("Recorded %s: %s", text_of(validation.(name), "date"), ...
-                        text_of(validation.(name), "evidence"));
-                elseif strlength(text) == 0
-                    text = sprintf(['Not recorded as passed in %s. Carry out the check ' ...
-                        '(docs/notebook.md, Phase 2 rig checks) and record it there.'], ...
-                        obj.Settings.hardware_validation_file);
-                end
-                checks(end+1) = check("firefly_" + name, "Firefly check recorded: " + name, ok, text); %#ok<AGROW>
+            if ok
+                checks(end+1) = hadamard_stim.metadata.readiness_item("data_folder", ...
+                    "Acquisition folder is writable", "pass", message=folder);
+            else
+                checks(end+1) = hadamard_stim.metadata.readiness_item("data_folder", ...
+                    "Acquisition folder is writable", "blocker", message=message, ...
+                    consequence="The run's recipe, trial records and checkpoints cannot be written.");
             end
 
-            report.checks = checks;
-            failed = checks([checks.status] == "fail");
-            report.failures = reshape(string({failed.message}), [], 1);
-            report.ok = isempty(failed);
+            [validation, problem] = obj.hardwareValidation();
+            current = struct("trigger_edge", string(cfg.dmd.trigger_edge), ...
+                "luminos_commit", luminos_commit(obj.App), ...
+                "hadamard_commit", package_commit(), ...
+                "dmd_serial", dmd_serial(rig.devices), ...
+                "dmd_code_changed", [], "dmd_code_changes", strings(1, 0));
+            then = recorded_luminos_commit(validation, "slide_queue");
+            if strlength(then) > 0 && strlength(current.luminos_commit) > 0
+                try
+                    [current.dmd_code_changed, current.dmd_code_changes] = ...
+                        obj.Options.dmd_code_changed_function(then, current.luminos_commit);
+                catch
+                end
+            end
+            gate = hadamard_stim.metadata.hardware_gate( ...
+                struct("hardware_validation", validation), mode, current);
+            items = gate.items;
+            if strlength(problem) > 0
+                for k = find(string({items.status}) == "warning")
+                    items(k).message = problem + " " + items(k).message;
+                end
+            end
+            checks = [checks reshape(items, 1, [])];
+
+            report = hadamard_stim.metadata.readiness_report(checks);
             report.calibration = obj.blueCalibrationStatus();
+        end
+
+        function cam = imaging_camera(obj)
+            % The imaging camera's area and format, as the Camera tab left
+            % them: the field of view is chosen there and inherited; the
+            % acquisition timing (trigger, frames, exposure) is the
+            % package's. Read only, cheap enough for every getState.
+            cam = [];
+            try
+                spec = obj.Options.profile.devices.camera;
+                c = obj.App.getDevice(spec.type, "name", spec.name, "displayWarning", false);
+                if numel(c) ~= 1
+                    return
+                end
+                roi = double(c.getROIForAcquisition());   % [x width y height], unbinned
+                bin = double(c.bin);
+                cam = struct("name", string(c.name), "roi", roi, "width", roi(2), ...
+                    "height", roi(4), "bin", bin, "frame_size", floor([roi(4) roi(2)] ./ bin), ...
+                    "bit_depth", double(read(c, "bit_depth", 16)), ...
+                    "bit_mode", string(read(c, "bit_mode_label", "")));
+            catch
+                cam = [];
+            end
+        end
+
+        function sets = calibration_scan_sets(obj)
+            % Hadamard calibration scan sets taken from the tab before
+            % (hadamard_calibration_scan.json, under the run root or the
+            % user's dated data folders), newest first, each with whether
+            % it fits the camera as it is set now: reusing one is setting
+            % calibration_folders to its folders.
+            sets = struct("taken_utc", {}, "folders", {}, "camera_roi", {}, "bin", {}, ...
+                "label", {}, "compatible", {}, "message", {}, "in_use", {});
+            root = obj.dataRoot();
+            if strlength(obj.Settings.run_root) == 0 && strlength(root) > 0
+                root = fileparts(root);
+            end
+            if strlength(root) == 0 || ~isfolder(root)
+                return
+            end
+            found = [dir(fullfile(root, "*", "hadamard_calibration_scan.json")); ...
+                dir(fullfile(root, "*", "*", "hadamard_calibration_scan.json"))];
+            seen = strings(0, 1);
+            records = struct("record", {}, "datenum", {});
+            for f = reshape(found, 1, [])
+                try
+                    r = jsondecode(fileread(fullfile(f.folder, f.name)));
+                catch
+                    continue
+                end
+                key = strjoin(string(r.folders), "|");
+                if ismember(key, seen)
+                    continue
+                end
+                seen(end+1) = key; %#ok<AGROW>
+                records(end+1) = struct("record", r, "datenum", f.datenum); %#ok<AGROW>
+            end
+            [~, order] = sort([records.datenum], "descend");
+            in_use = strjoin(obj.Settings.calibration_folders, "|");
+            for r = records(order)
+                [compatible, message] = obj.scanSetFits(r.record);
+                sets(end+1) = struct("taken_utc", string(r.record.taken_utc), ...
+                    "folders", reshape(string(r.record.folders), 1, []), ...
+                    "camera_roi", reshape(r.record.camera.roi, 1, []), "bin", r.record.camera.bin, ...
+                    "label", string(field_or(r.record.settings, "label", "")), ...
+                    "compatible", compatible, "message", message, ...
+                    "in_use", strjoin(string(r.record.folders), "|") == in_use); %#ok<AGROW>
+            end
+        end
+
+        function result = run_commissioning_check(obj, name, cfg)
+            % Run one of the two DMD commissioning checks and record it in
+            % the hardware validation file (record_firefly_check):
+            % "queue_support" (Supports_Sequence_Queue) or "slide_queue"
+            % (queue playback on a uniform slide, on the protocol's edge).
+            % The driver probe is an installation step with Luminos closed
+            % (README), not a tab check.
+            file = obj.Settings.hardware_validation_file;
+            if strlength(file) == 0
+                error("hadamard_stim:NoValidationFile", ...
+                    "Name the hardware validation file in the rig settings first; the result is recorded there.");
+            end
+            if isequal(read(obj.App, "acquisition_active", false), true)
+                error("hadamard_stim:LuminosBusy", "Luminos is acquiring; wait for it to finish.");
+            end
+            switch name
+                case "queue_support"
+                    result = hadamard_stim.checks.queue_support_check(obj.App, obj.Options.profile);
+                case "slide_queue"
+                    result = hadamard_stim.checks.slide_queue_check(obj.App, ...
+                        trigger_edge=string(cfg.dmd.trigger_edge), profile=obj.Options.profile, ...
+                        acquisition_function=obj.Options.acquisition_function, ...
+                        frame_means=obj.Options.slide_queue_frame_means);
+                otherwise
+                    error("hadamard_stim:NotFromTheTab", ...
+                        ['There is no "%s" check in the tab: it runs "queue_support" and ' ...
+                         '"slide_queue". The driver probe needs Luminos closed (README, ' ...
+                         'Installation).'], name);
+            end
+            hadamard_stim.checks.record_firefly_check(file, result);
         end
 
         function result = calibrate_blue_led(obj)
@@ -196,7 +299,7 @@ classdef LuminosBackend < handle
             hw = hadamard_stim.luminos.LuminosRig(obj.App, profile=obj.Options.profile, ...
                 acquisition_function=obj.Options.acquisition_function);
             report = hw.begin(cfg, "calibration_scan");
-            if ~report.ok
+            if ~report.can_run
                 hw.release();
                 error("hadamard_stim:HardwareNotReady", ...
                     "The rig cannot take the calibration scans:\n  %s", ...
@@ -279,51 +382,99 @@ classdef LuminosBackend < handle
             end
         end
 
-        function [ok, message] = scanCalibrationReady(obj, needed)
-            ok = true;
-            message = "";
-            if ~needed || ~isempty(obj.Options.calibration_movies)
+        function item = scanCalibrationCheck(obj, cfg)
+            % The Hadamard calibration scans every reconstruction uses (the
+            % reference image, the z-stack, drift correction). None at all
+            % blocks the actions that reconstruct; scans taken at another
+            % camera area or binning, or on another day, can still be used
+            % and are reported as such.
+            id = "scan_calibration";
+            label = "Hadamard calibration scans";
+            if hadamard_stim.metadata.session_mode(cfg) == "spontaneous"
+                needed = isequal(cfg.spontaneous.drift_correction, true);
+                why_not = "Not needed: drift correction between blocks is off.";
+            else
+                needed = cfg.z_reference.enabled || cfg.drift.enabled;
+                why_not = "Not needed: z-reference and drift correction are off.";
+            end
+            make = @(status, varargin) hadamard_stim.metadata.readiness_item(id, label, status, ...
+                "group", "calibration", varargin{:});
+            if ~needed
+                item = make("not_needed", message=why_not);
                 return
             end
+            if ~isempty(obj.Options.calibration_movies)
+                item = make("pass", message="Given as movies.");
+                return
+            end
+            none = "Reconstruction needs them: the reference image, the z-stack and drift correction cannot be computed.";
             folders = obj.Settings.calibration_folders;
             if isempty(folders)
-                ok = false;
-                message = ['Drift correction and the z-reference reconstruct Hadamard scans: name ' ...
-                    'the Luminos folders of his calibration scans (had_cal) in the rig settings.'];
+                item = make("blocker", message= ...
+                    "None named. Take them on a uniform slide, or reuse an earlier set.", consequence=none);
                 return
             end
             missing = folders(~isfolder(folders));
             if ~isempty(missing)
-                ok = false;
-                message = "These calibration folders do not exist: " + strjoin(missing, ", ") + ".";
+                item = make("blocker", message="These calibration folders do not exist: " + ...
+                    strjoin(missing, ", ") + ".", consequence=none);
                 return
             end
-            % Scans taken by acquire_calibration_scans say at which camera
-            % area; reconstruction centre-crops the calibration to each
-            % scan, so another area or binning would reconstruct wrongly.
+            record = [];
+            for folder = folders(:)'
+                file = fullfile(folder, "hadamard_calibration_scan.json");
+                if isfile(file)
+                    record = jsondecode(fileread(file));
+                    break
+                end
+            end
+            if isempty(record)
+                item = make("warning", message=sprintf(['%d folder(s), not taken from the tab: the ' ...
+                    'camera area they were taken at is not recorded.'], numel(folders)), ...
+                    consequence="Reconstruction may be spatially wrong if they were taken at another camera area or binning.", ...
+                    details=struct("folders", folders, "taken_utc", ""));
+                return
+            end
+            [compatible, message] = obj.scanSetFits(record);
+            age = hadamard_stim.metadata.calibration_age(string(record.taken_utc));
+            details = struct("folders", reshape(folders, 1, []), "taken_utc", age.taken_utc, ...
+                "taken", age.taken, "ago", age.ago, "age_days", age.age_days, ...
+                "camera_roi", reshape(record.camera.roi, 1, []), "bin", record.camera.bin, ...
+                "compatible", compatible);
+            % Age is shown, never judged; only a misfit warns.
+            if ~compatible
+                item = make("warning", message=age.text + ". " + message, details=details, consequence= ...
+                    "Reconstruction centre-crops or pads the calibration to each scan, so it still runs, " + ...
+                    "but the reference image, z-stack and drift correction may be spatially wrong. Retake them at this area.");
+            else
+                % Age is text only: compatible scans pass whatever their age.
+                reused = "";
+                if ~age.today && ~isempty(age.age_days)
+                    reused = " — reused";
+                end
+                item = make("pass", message=age.text + reused + ". At this camera area and binning.", details=details);
+            end
+        end
+
+        function [compatible, message] = scanSetFits(obj, record)
+            % Whether scans recorded by record were taken at the camera's
+            % area and binning now (reconstruction centre-crops the
+            % calibration to each scan, so another area reconstructs wrongly).
+            compatible = true;
+            message = "At this camera area.";
             [devices, ~] = hadamard_stim.luminos.resolve_hardware(obj.App, obj.Options.profile);
             camera = devices.camera;
             if isempty(camera)
                 return
             end
             roi = camera.getROIForAcquisition();
-            for folder = folders(:)'
-                file = fullfile(folder, "hadamard_calibration_scan.json");
-                if ~isfile(file)
-                    continue
-                end
-                taken = jsondecode(fileread(file));
-                if ~isequal(reshape(taken.camera.roi, 1, []), reshape(double(roi), 1, [])) ...
-                        || taken.camera.bin ~= double(camera.bin)
-                    ok = false;
-                    message = sprintf(['The calibration scans in %s were taken at camera area %s, bin %g; ' ...
-                        'the camera is now at %s, bin %g. Take the calibration scans again at this area.'], ...
-                        folder, mat2str(reshape(taken.camera.roi, 1, [])), taken.camera.bin, ...
-                        mat2str(reshape(double(roi), 1, [])), double(camera.bin));
-                    return
-                end
+            if ~isequal(reshape(record.camera.roi, 1, []), reshape(double(roi), 1, [])) ...
+                    || record.camera.bin ~= double(camera.bin)
+                compatible = false;
+                message = sprintf('Taken at camera area %s, bin %g; the camera is now at %s, bin %g.', ...
+                    mat2str(reshape(record.camera.roi, 1, [])), record.camera.bin, ...
+                    mat2str(reshape(double(roi), 1, [])), double(camera.bin));
             end
-            message = sprintf("%d folder(s).", numel(folders));
         end
 
         function [validation, message] = hardwareValidation(obj)
@@ -373,14 +524,6 @@ classdef LuminosBackend < handle
     end
 end
 
-function c = check(id, label, ok, message)
-status = "pass";
-if ~ok
-    status = "fail";
-end
-c = struct("id", id, "label", label, "status", status, "message", string(message));
-end
-
 function [ok, message] = writable(folder)
 ok = false;
 if strlength(folder) == 0
@@ -399,13 +542,6 @@ if ~ok
 end
 end
 
-function t = text_of(s, name)
-t = "(not recorded)";
-if isfield(s, name) && ~isempty(s.(name))
-    t = string(s.(name));
-end
-end
-
 function v = read(object, name, default)
 v = default;
 try
@@ -413,5 +549,53 @@ try
         v = object.(name);
     end
 catch
+end
+end
+
+function t = luminos_commit(app)
+t = "";
+try
+    info = luminos_session_info(app);
+    t = string(info.git.commit);
+catch
+end
+end
+
+function t = package_commit()
+% This package's commit, read once per MATLAB session (a git call).
+persistent commit
+if isempty(commit)
+    repo = fileparts(fileparts(fileparts(mfilename("fullpath"))));
+    commit = hadamard_stim.metadata.git_provenance(repo).commit;
+end
+t = commit;
+end
+
+function t = dmd_serial(devices)
+t = "";
+try
+    if ~isempty(devices.dmd)
+        t = string(devices.dmd.serial);
+    end
+catch
+end
+end
+
+function v = field_or(s, name, default)
+v = default;
+if isstruct(s) && isfield(s, name)
+    v = s.(name);
+end
+end
+
+function t = recorded_luminos_commit(validation, name)
+% The Luminos commit a recorded check ran under, "" when not recorded.
+t = "";
+try
+    t = string(validation.(name).provenance.luminos_commit);
+catch
+end
+if ~isscalar(t)
+    t = "";
 end
 end

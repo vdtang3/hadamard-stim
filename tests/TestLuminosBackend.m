@@ -44,20 +44,31 @@ classdef TestLuminosBackend < matlab.unittest.TestCase
             checks = r.state.preflight.checks;
             ids = string({checks.id});
             testCase.verifyEqual(numel(unique(ids)), numel(ids));
-            testCase.verifyEqual(ids(1:3), ["config" "rig" "luminos_idle"]);
+            testCase.verifyEqual(ids(1:2), ["rig" "luminos_idle"]);
+            testCase.verifyEqual(r.state.readiness.checks(1).id, "config");
             for id = ["device_dmd" "device_camera" "device_behavior_camera" "device_daq" ...
-                    "device_stage" "device_blue_modulator" "dmd_queue" "dmd_ownership" ...
+                    "device_stage" "device_blue_modulator" "dmd_board" "dmd_queue" "dmd_ownership" ...
                     "dmd_canvas" "dmd_polarity" "daq_rate" "daq_outputs" "camera_settings" ...
                     "blue_calibration" "dmd_calibration" "scan_calibration" "data_folder" ...
-                    "firefly_driver" "firefly_trigger_edge" "firefly_queue_support" "firefly_slide_queue"]
+                    "firefly_queue_support" "firefly_slide_queue"]
                 testCase.verifyTrue(ismember(id, ids), id);
             end
-            failed = checks([checks.status] == "fail");
-            testCase.verifyEqual(sort(string({failed.id})), ...
-                sort(["dmd_ownership" "firefly_driver" "firefly_trigger_edge" "firefly_queue_support" "firefly_slide_queue"]));
+            testCase.verifyFalse(any(ismember(["firefly_driver" "firefly_trigger_edge"], ids)));
+            % Another owner is a hardware conflict (blocker); commissioning
+            % checks recorded as failed are evidence, not a refusal: a failed
+            % slide test is a warning, a failed queue-support record history
+            % (the live driver answers).
+            blocked = checks([checks.status] == "blocker");
+            testCase.verifyEqual(string({blocked.id}), "dmd_ownership");
+            warned = checks([checks.status] == "warning");
+            testCase.verifyEqual(string({warned.id}), "firefly_slide_queue");
+            testCase.verifyEqual(checks(ids == "firefly_queue_support").status, "info");
+            testCase.verifySubstring(warned(1).message, "FAILED");
             owner = checks(ids == "dmd_ownership");
             testCase.verifySubstring(owner.message, "owned by ""adaptive_optopatch""");
-            testCase.verifyFalse(r.state.preflight.ok);
+            testCase.verifyFalse(owner.overrideable);
+            testCase.verifyFalse(r.state.preflight.can_run);
+            testCase.verifyFalse(r.state.readiness.can_run);
             % Read only: no device operation, the owner untouched, and the
             % session's lifecycle and environment as they were.
             testCase.verifyEqual(numel(app.Log), n);
@@ -88,7 +99,7 @@ classdef TestLuminosBackend < matlab.unittest.TestCase
             testCase.verifyEqual(s.blue_threshold, 15);
             testCase.verifyEqual(s.identity.device, "Blue LED 488");
 
-            blue = app.getDevice("NI_DAQ_Modulator");
+            blue = app.getDevice("NI_DAQ_Modulator", "name", "Blue LED 488");
             blue.iscalibrated = false;
             c.runPreflight();
             s = c.getState().calibration;
@@ -172,7 +183,7 @@ classdef TestLuminosBackend < matlab.unittest.TestCase
             testCase.assertTrue(act("update_config", struct("changes", config_changes(cfg))).ok);
             testCase.assertEqual(tab.Config, cfg);
             testCase.assertTrue(act("run_preflight", struct()).ok);
-            testCase.assertTrue(tab.Preflight.ok, strjoin(string({tab.Preflight.checks([tab.Preflight.checks.status] == "fail").message}), newline));
+            testCase.assertTrue(tab.Preflight.can_run, strjoin(string({tab.Preflight.checks([tab.Preflight.checks.status] == "blocker").message}), newline));
             testCase.assertTrue(act("prepare_rig", struct()).ok);
             use_parity_scans(tab, testCase.Root);
             r = act("acquire_reference_image", struct());
@@ -237,16 +248,58 @@ classdef TestLuminosBackend < matlab.unittest.TestCase
             testCase.verifyEqual(r.state.lifecycle, "COMPLETED");
         end
 
-        function aRunNeedsTheRecordedFireflyChecks(testCase)
+        function failedFireflyChecksAreAcknowledgedOnceThenRecorded(testCase)
+            % Checks recorded as failed: the tab shows them as warnings, Run
+            % refuses until they are acknowledged together, touching
+            % nothing, and the recipe records the override.
             [c, app, cfg] = tab_session(testCase.Folder, validated=false);
             cfg.trials.last = 1;
             testCase.ready(c, cfg);
             n = numel(app.Log);
             r = hadamard_stim.apply_controller_action(c, "start_run", struct(), c.Revision);
-            testCase.verifyEqual(r.identifier, "hadamard_stim:HardwareNotValidated");
+            testCase.verifyEqual(r.identifier, "hadamard_stim:WarningsNotAcknowledged");
             testCase.verifyEqual(numel(app.Log), n);
-            testCase.verifyEqual(r.state.environment.hardware_gate.missing, ...
-                ["driver" "trigger_edge" "queue_support" "slide_queue"]);
+            testCase.verifyEqual(r.state.environment.hardware_gate.missing, "slide_queue");
+            readiness = r.state.readiness;
+            testCase.verifyTrue(readiness.can_run);
+            ids = string({readiness.warnings.id});
+            testCase.verifyEqual(ids, "firefly_slide_queue");
+            r = hadamard_stim.apply_controller_action(c, "start_run", ...
+                struct("acknowledged_warnings", ids), c.Revision);
+            testCase.assertTrue(r.ok, r.message);
+            recipe = jsondecode(fileread(fullfile(c.RunFolder, "run_recipe.json")));
+            testCase.verifyTrue(recipe.start_override.operator_override);
+            testCase.verifyEqual(string({recipe.start_override.warnings.id}), ids);
+            testCase.verifySubstring(recipe.start_override.warnings(1).consequence, "diagnostic data");
+        end
+
+        function aConflictingDaqOutputBlocksTheRun(testCase)
+            % Another waveform on a port the protocol drives: no override.
+            [c, app, cfg] = tab_session(testCase.Folder);
+            cfg.trials.last = 1;
+            testCase.ready(c, cfg);
+            daq = app.getDevice("DAQ");
+            wf = daq.wfm_data;
+            wf.ao(end+1) = struct("name", 'Ambient', "port", 'Dev1/ao0', "wavefile", 'awfm_constant', ...
+                "params", {{1}}, "operation", 'Addition', "concatTime", []);
+            daq.wfm_data = wf;
+            r = hadamard_stim.apply_controller_action(c, "run_preflight", struct(), c.Revision);
+            testCase.verifyFalse(r.state.readiness.can_run);
+            r = hadamard_stim.apply_controller_action(c, "start_run", ...
+                struct("acknowledged_warnings", string({r.state.readiness.checks.id})), c.Revision);
+            testCase.verifyEqual(r.identifier, "hadamard_stim:HardwareNotReady");
+            testCase.verifySubstring(r.message, "already drives Dev1/ao0");
+            testCase.verifyEqual(c.RunFolder, "");
+        end
+
+        function anAcquisitionInProgressBlocksTheRun(testCase)
+            [c, app, cfg] = tab_session(testCase.Folder);
+            cfg.trials.last = 1;
+            testCase.ready(c, cfg);
+            app.acquisition_active = true;
+            r = hadamard_stim.apply_controller_action(c, "start_run", struct(), c.Revision);
+            testCase.verifyEqual(r.identifier, "hadamard_stim:HardwareNotReady");
+            testCase.verifySubstring(r.message, "middle of an acquisition");
         end
     end
 
@@ -301,5 +354,5 @@ end
 
 function v = passed_checks()
 passed = struct("passed", true, "evidence", "test", "date", "2026-10-14");
-v = struct("driver", passed, "trigger_edge", passed, "queue_support", passed, "slide_queue", passed);
+v = struct("queue_support", passed, "slide_queue", passed);
 end

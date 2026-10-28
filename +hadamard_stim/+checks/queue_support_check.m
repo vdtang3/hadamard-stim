@@ -18,5 +18,6 @@ else
     evidence = sprintf(['%s.Supports_Sequence_Queue() returned false: the loaded ALP driver ' ...
         'does not accept the queue mode his stimulation trials need.'], dmd.name);
 end
-result = hadamard_stim.checks.check_result("queue_support", supported, evidence);
+result = hadamard_stim.checks.check_result("queue_support", supported, evidence, struct(), ...
+    hadamard_stim.checks.check_provenance(app, profile));
 end

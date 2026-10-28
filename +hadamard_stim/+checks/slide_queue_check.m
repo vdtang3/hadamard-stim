@@ -1,5 +1,5 @@
 function result = slide_queue_check(app, options)
-%SLIDE_QUEUE_CHECK Firefly check 4: a small queue, stepped by DAQ triggers, plays as modelled.
+%SLIDE_QUEUE_CHECK Queue playback on a slide: a small queue, stepped by DAQ triggers, plays as modelled.
 %
 %   result = hadamard_stim.checks.slide_queue_check(app, trigger_edge="rising")
 %
@@ -19,8 +19,9 @@ function result = slide_queue_check(app, options)
 %   not decide the check.
 %
 %   Options:
-%     trigger_edge     "rising" or "falling"; default: what the board
-%                      reports now (trigger_edge_check)
+%     trigger_edge     "rising" or "falling"; default: the protocol's
+%                      edge (default_config().dmd.trigger_edge, rising),
+%                      which Load_Sequence_Queue sets explicitly
 %     profile, acquisition_function   as for LuminosRig (tests substitute fakes)
 %     frame_means      @(acq) mean of each frame; default reads the imaging
 %                      camera's movie
@@ -30,25 +31,20 @@ function result = slide_queue_check(app, options)
 %   picture) and the fit.
 arguments
     app
-    options.trigger_edge (1, 1) string = ""
+    options.trigger_edge (1, 1) string {mustBeMember(options.trigger_edge, ["rising" "falling"])} = hadamard_stim.default_config().dmd.trigger_edge
     options.profile struct = hadamard_stim.luminos.firefly_profile()
     options.acquisition_function = @Waveform_Camera_Sync_Acquisition
     options.frame_means = []
 end
 profile = options.profile;
 edge = options.trigger_edge;
-if strlength(edge) == 0
-    edge = hadamard_stim.checks.trigger_edge_check(app, profile).details.trigger_edge;
-end
-if ~ismember(edge, ["rising" "falling"])
-    error("hadamard_stim:NoTriggerEdge", "Give trigger_edge: the board did not report one.");
-end
 
 [devices, ~] = hadamard_stim.luminos.resolve_hardware(app, profile);
 dmd = devices.dmd;
 if isempty(dmd) || ~logical(dmd.Supports_Sequence_Queue())
     result = hadamard_stim.checks.check_result("slide_queue", false, ...
-        "Not run: the DMD does not support the sequence queue (check 3).");
+        "Not run: the DMD does not support the sequence queue.", struct(), ...
+        hadamard_stim.checks.check_provenance(app, profile));
     return
 end
 
@@ -76,12 +72,14 @@ rig = hadamard_stim.luminos.LuminosRig(app, profile=profile, ...
     acquisition_function=options.acquisition_function);
 release = onCleanup(@() rig.release()); %#ok<NASGU>
 report = rig.begin(cfg, "calibration_scan");
-if ~report.ok
+if ~report.can_run
     error("hadamard_stim:HardwareNotReady", "The rig cannot run the queue check:\n  %s", ...
         strjoin(report.failures, newline + "  "));
 end
 rig.dmd_load_queue(sequences, repeats);
-waveform = hadamard_stim.protocol.scan_waveform(cfg, c.waveform_period_ms, c.orange_v, n_frames, 1);
+roi = double(devices.camera.getROIForAcquisition());   % [x width y height]
+waveform = hadamard_stim.protocol.scan_waveform(cfg, c.waveform_period_ms, c.orange_v, n_frames, 1, ...
+    camera_rows=roi(4));
 n_triggers = hadamard_stim.waveform.rising_edges(waveform, "dmdTrigger");
 spec = hadamard_stim.protocol.acquisition_spec("queue_check", "firefly_slide_queue_check", ...
     waveform, camera_exposure_ms=c.camera_exposure_ms);
@@ -132,5 +130,6 @@ details = struct("trigger_edge", edge, "pictures", pictures, "repeats", repeats,
     "n_frames", n_frames, "expected", expected, "classified", classified, ...
     "means", means, "fit", fit, "noise", noise, "after_dry", dry, ...
     "luminos_folder", string(acq.luminos_folder));
-result = hadamard_stim.checks.check_result("slide_queue", passed, evidence, details);
+result = hadamard_stim.checks.check_result("slide_queue", passed, evidence, details, ...
+    hadamard_stim.checks.check_provenance(app, profile));
 end

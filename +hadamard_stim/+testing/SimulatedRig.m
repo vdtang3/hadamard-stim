@@ -43,7 +43,10 @@ classdef SimulatedRig < handle
         % to inject failures.
         before_operation = []
         % What begin() reports; tests set it to refuse a configuration.
-        readiness = struct("ok", true, "failures", strings(0, 1))
+        readiness = hadamard_stim.metadata.readiness_report(struct([]))
+        % His Kinetix active area, 328 x 448 (2025-03-08 RCaMPtopatch.set:
+        % ActiveareaDropDown "328 x 448", 328 vertical pixels).
+        camera_rows_ = 328
         sessions = 0                 % begin() calls
         releases = 0                 % release() calls
         aborted = false              % abort() called since the last begin()
@@ -57,6 +60,10 @@ classdef SimulatedRig < handle
 
         function z = motor_position(obj)
             z = obj.position;
+        end
+
+        function n = camera_rows(obj)
+            n = obj.camera_rows_;
         end
 
         function motor_move_to(obj, z)

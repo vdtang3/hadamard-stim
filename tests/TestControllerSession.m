@@ -39,12 +39,10 @@ classdef TestControllerSession < matlab.unittest.TestCase
             act = @(a, p) hadamard_stim.apply_controller_action(c, a, p, c.Revision);
             r = act("update_config", struct("changes", {{ ...
                 struct("path", "trials.last", "value", 40), ...
-                struct("path", "z_reference.enabled", "value", false), ...
-                struct("path", "dmd.trigger_edge", "value", "falling")}}));
+                struct("path", "z_reference.enabled", "value", false)}}));
             testCase.verifyTrue(r.ok, r.message);
             testCase.verifyEqual(c.Config.trials.last, 40);
             testCase.verifyEqual(c.Config.z_reference.enabled, false);
-            testCase.verifyEqual(c.Config.dmd.trigger_edge, "falling");
             % The package says what changing a protocol setting means.
             testCase.verifyEqual(r.state.mode, "modified");
             testCase.verifyEqual(string({r.state.deviations.path}), "z_reference.enabled");
@@ -62,8 +60,12 @@ classdef TestControllerSession < matlab.unittest.TestCase
             r = act("update_config", struct("changes", [struct("path", "trials.last", "value", 3), ...
                 struct("path", "trials.first", "value", 1.5)]));
             testCase.verifyEqual(r.identifier, "hadamard_stim:InvalidValue");
-            r = act("update_config", struct("changes", struct("path", "dmd.trigger_edge", "value", "both")));
+            r = act("update_config", struct("changes", struct("path", "z_reference.enabled", "value", "both")));
             testCase.verifyEqual(r.identifier, "hadamard_stim:InvalidValue");
+            % The queue's trigger edge is the protocol's (rising), not an
+            % operator setting.
+            r = act("update_config", struct("changes", struct("path", "dmd.trigger_edge", "value", "falling")));
+            testCase.verifyEqual(r.identifier, "hadamard_stim:NotEditable");
             testCase.verifyEqual(c.Config, before);
         end
 

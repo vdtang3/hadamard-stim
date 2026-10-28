@@ -34,7 +34,9 @@ function env = make_environment(app, cfg, options)
 %   resolved if it can be (so the session can switch to connectivity
 %   without preparing again) and recorded as unavailable if not.
 %
-%   Errors, listing every problem, if the rig cannot run cfg (preflight).
+%   Errors, listing every blocker, if the rig cannot run cfg (preflight).
+%   Warnings do not stop it: preparing the rig is not a run, and the
+%   operator confirms them, all at once, when the run starts.
 arguments
     app
     cfg struct
@@ -53,7 +55,7 @@ if isempty(lines)
 end
 report = hadamard_stim.luminos.preflight(app, cfg, ...
     blue_threshold=options.blue_threshold, profile=profile, wheel_encoder_lines=lines);
-if ~report.ok
+if ~report.can_run
     error("hadamard_stim:RigNotReady", "%s cannot run this configuration:\n  %s", ...
         profile.rig_name, strjoin(report.failures, newline + "  "));
 end
@@ -72,7 +74,7 @@ end
 env.hw = hadamard_stim.luminos.LuminosRig(app, blue_threshold=options.blue_threshold, ...
     profile=profile, acquisition_function=options.acquisition_function, ...
     wheel_encoder_lines=lines);
-env.geometry = hadamard_stim.luminos.active_geometry(devices.dmd, devices.camera);
+[env.geometry, ~] = hadamard_stim.luminos.active_geometry(devices.dmd, devices.camera);
 if hadamard_stim.metadata.session_mode(cfg) == "spontaneous"
     try
         env.blue_calibration = hadamard_stim.luminos.active_blue_calibration( ...

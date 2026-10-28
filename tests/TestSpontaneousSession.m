@@ -71,7 +71,7 @@ classdef TestSpontaneousSession < matlab.unittest.TestCase
 
         function blocksRunWithDriftCorrectionAndBleachingAsHeRanThem(testCase)
             [c, env] = testCase.session(n_blocks=3);
-            c.startRun(testCase.Folder);
+            c.startRun(testCase.Folder, AcknowledgedWarnings="config_deviations");
             testCase.assertEqual(c.LifecycleState, "COMPLETED");
             a = env.hw.acquisitions;
             blocks = a([a.kind] == "spontaneous");
@@ -109,7 +109,7 @@ classdef TestSpontaneousSession < matlab.unittest.TestCase
         function withoutDriftCorrectionThereIsNoZStackOrStageMove(testCase)
             [c, env] = testCase.session(n_blocks=2, drift=false, z_reference=false);
             testCase.verifyEqual(c.LifecycleState, "READY");
-            c.startRun(testCase.Folder);
+            c.startRun(testCase.Folder, AcknowledgedWarnings="config_deviations");
             testCase.assertEqual(c.LifecycleState, "COMPLETED");
             testCase.verifyEqual([env.hw.acquisitions.kind], ["spontaneous" "spontaneous"]);
             testCase.verifyEmpty(env.hw.moves);
@@ -123,7 +123,7 @@ classdef TestSpontaneousSession < matlab.unittest.TestCase
 
         function aOneBlockTestNeedsNoParticularLength(testCase)
             [c, env] = testCase.session(n_blocks=1, block_frames=50);
-            c.startRun(testCase.Folder);
+            c.startRun(testCase.Folder, AcknowledgedWarnings="config_deviations");
             testCase.assertEqual(c.LifecycleState, "COMPLETED");
             block = env.hw.acquisitions(end);
             testCase.verifyEqual(block.n_frames, 50);
@@ -139,13 +139,13 @@ classdef TestSpontaneousSession < matlab.unittest.TestCase
 
         function anAbortedBlockIsAcquiredAgainOnResume(testCase)
             [straight, ~] = testCase.session(n_blocks=3);
-            straight.startRun(testCase.Folder + "_straight");
+            straight.startRun(testCase.Folder + "_straight", AcknowledgedWarnings="config_deviations");
             testCase.addTeardown(@() rmdir_if(testCase.Folder + "_straight"));
             expected = block_records(testCase.Folder + "_straight");
 
             [c, env] = testCase.session(n_blocks=3);
             c.StatusChangedFcn = @(ctrl) abort_in_block(ctrl, 2);
-            c.startRun(testCase.Folder);
+            c.startRun(testCase.Folder, AcknowledgedWarnings="config_deviations");
             c.StatusChangedFcn = [];
             testCase.assertEqual(c.LifecycleState, "ABORTED");
             testCase.verifySubstring(c.LastError, "resumes at block 2");
@@ -172,7 +172,7 @@ classdef TestSpontaneousSession < matlab.unittest.TestCase
 
         function theStateAndRecordsCarryNoBulkData(testCase)
             [c, env] = testCase.session(n_blocks=2);
-            c.startRun(testCase.Folder);
+            c.startRun(testCase.Folder, AcknowledgedWarnings="config_deviations");
             state = c.getState();
             testCase.verifyLessThan(strlength(jsonencode(state)), 64e3);
             testCase.verifyEqual(state.progress.unit, "block");
@@ -199,9 +199,10 @@ classdef TestSpontaneousSession < matlab.unittest.TestCase
             cfg.naming.prefix = "M1";
             cfg.segmentation.n_exclude = 5;
             cfg.stimulation.orange_start_v = 1;
-            % Connectivity needs the trigger edge; spontaneous does not.
+            % The trigger edge is the protocol's (rising): nothing to set.
             report = hadamard_stim.validate_config(cfg);
-            testCase.verifyEqual(report.errors, "dmd.trigger_edge is not set.");
+            testCase.verifyTrue(report.ok, strjoin(report.errors, " "));
+            testCase.verifyEqual(cfg.dmd.trigger_edge, "rising");
             cfg.session.mode = "spontaneous";
             report = hadamard_stim.validate_config(cfg);
             testCase.verifyTrue(report.ok, strjoin(report.errors, " "));
@@ -210,11 +211,16 @@ classdef TestSpontaneousSession < matlab.unittest.TestCase
             % and the other way round.
             cfg.sparse.blue_v = 3;
             testCase.verifyEqual(hadamard_stim.validate_config(cfg).mode, "yitong_compatible");
+            % The number of blocks is the run's scope, like the trial range;
+            % their length changes the measurement.
             cfg.spontaneous.n_blocks = 1;
             report = hadamard_stim.validate_config(cfg);
-            testCase.verifyEqual(string({report.deviations.path}), "spontaneous.n_blocks");
+            testCase.verifyEmpty(report.deviations);
+            cfg.spontaneous.block_frames = 1000;
+            report = hadamard_stim.validate_config(cfg);
+            testCase.verifyEqual(string({report.deviations.path}), "spontaneous.block_frames");
+            cfg.spontaneous.block_frames = hadamard_stim.default_config().spontaneous.block_frames;
             cfg.session.mode = "connectivity";
-            cfg.dmd.trigger_edge = "rising";
             report = hadamard_stim.validate_config(cfg);
             testCase.verifyEqual(string({report.deviations.path}), "sparse.blue_v");
             % Streams off are warnings, never deviations.
@@ -243,11 +249,15 @@ classdef TestSpontaneousSession < matlab.unittest.TestCase
             r = hadamard_stim.apply_controller_action(c, "acquire_z_reference", struct(), c.Revision);
             testCase.verifyTrue(r.ok, r.message);
             testCase.verifyTrue(c.legalActions().start_run);
-            % The Firefly checks a mode needs.
-            context = struct("hardware_validation", struct("driver", struct("passed", true)));
-            testCase.verifyTrue(hadamard_stim.metadata.hardware_gate(context, "spontaneous").ok);
+            % The DMD checks a mode uses; a missing slide test is a warning,
+            % not a refusal, and a spontaneous session uses neither.
+            context = struct("hardware_validation", struct());
+            gate = hadamard_stim.metadata.hardware_gate(context, "spontaneous");
+            testCase.verifyTrue(gate.all_passed);
+            testCase.verifyEqual(string({gate.items.status}), ["not_needed" "not_needed"]);
             gate = hadamard_stim.metadata.hardware_gate(context, "connectivity");
-            testCase.verifyEqual(gate.missing, ["trigger_edge" "queue_support" "slide_queue"]);
+            testCase.verifyEqual(gate.missing, "slide_queue");
+            testCase.verifyEqual(string({gate.items.status}), ["info" "warning"]);
         end
 
         function aFullLengthBlockThroughTheAdapterHoldsNoSamples(testCase)
@@ -270,7 +280,7 @@ classdef TestSpontaneousSession < matlab.unittest.TestCase
             c.runPreflight();
             memory_check = c.Preflight.checks(string({c.Preflight.checks.id}) == "block_memory");
             testCase.verifySubstring(memory_check.message, "36.6 M samples");
-            c.startRun(fullfile(testCase.Folder, "run"));
+            c.startRun(fullfile(testCase.Folder, "run"), AcknowledgedWarnings="config_deviations");
             testCase.assertEqual(c.LifecycleState, "COMPLETED", c.LastError);
             block = app.Acquisitions(end);
             n = (200 + 288000) * 127;
@@ -326,7 +336,7 @@ classdef TestSpontaneousSession < matlab.unittest.TestCase
                     c.proposeCells();
                     c.approveCells();
                     c.acquireZReference();
-                    c.startRun(fullfile(folders(k), "run"));
+                    c.startRun(fullfile(folders(k), "run"), AcknowledgedWarnings="config_deviations");
                 else
                     act = @(a, p) hadamard_stim.apply_controller_action(c, a, p, c.Revision);
                     changes = config_changes(cfg);
@@ -337,7 +347,8 @@ classdef TestSpontaneousSession < matlab.unittest.TestCase
                         r = act(step, struct());
                         testCase.assertTrue(r.ok, step + ": " + r.message);
                     end
-                    r = act("start_run", struct("run_folder", fullfile(folders(k), "run")));
+                    r = act("start_run", struct("run_folder", fullfile(folders(k), "run"), ...
+                        "acknowledged_warnings", "config_deviations"));
                     testCase.assertTrue(r.ok, r.message);
                 end
                 testCase.assertEqual(c.LifecycleState, "COMPLETED");

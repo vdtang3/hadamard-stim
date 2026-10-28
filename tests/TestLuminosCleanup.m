@@ -28,7 +28,7 @@ classdef TestLuminosCleanup < matlab.unittest.TestCase
             testCase.addTeardown(@() rmdir(testCase.Folder, "s"));
             [testCase.App, testCase.Cfg, ~, testCase.Rig] = fake_firefly(testCase.Folder);
             report = testCase.Rig.begin(testCase.Cfg);
-            testCase.assertTrue(report.ok, strjoin(report.failures, newline));
+            testCase.assertTrue(report.can_run, strjoin(report.failures, newline));
         end
     end
 
@@ -189,7 +189,7 @@ classdef TestLuminosCleanup < matlab.unittest.TestCase
         function spec = scanSpec(testCase)
             cfg = testCase.Cfg;
             waveform = hadamard_stim.protocol.scan_waveform(cfg, cfg.scan.waveform_period_ms, ...
-                cfg.scan.orange_v, 64);
+                cfg.scan.orange_v, 64, camera_rows=328);
             spec = hadamard_stim.protocol.acquisition_spec("z_stack_plane", "cleanup_test", ...
                 waveform, camera_exposure_ms=cfg.scan.camera_exposure_ms);
         end

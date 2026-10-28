@@ -16,10 +16,13 @@ function report = validate_config(cfg)
 %
 %   Only the settings the session mode uses are compared (connectivity
 %   trials, or spontaneous blocks). Settings no evidence fixes
-%   (naming.prefix, segmentation.n_exclude, stimulation.orange_start_v and,
-%   for connectivity, dmd.trigger_edge) are required rather than compared;
-%   the trial range is a run's scope, and behavior.* are companions, so
-%   none of those is a deviation.
+%   (naming.prefix, segmentation.n_exclude, stimulation.orange_start_v)
+%   are required rather than compared; the trial range and the number of
+%   spontaneous blocks are a run's scope, and behavior.* are companions, so
+%   none of those is a deviation. spontaneous.block_frames is: it changes
+%   each block's duration and when drift and bleaching are corrected.
+%   dmd.trigger_edge is the protocol's (rising); another edge is a
+%   deviation.
 reference = hadamard_stim.default_config();
 errors = strings(0, 1);
 warnings = strings(1, 0);
@@ -35,9 +38,6 @@ end
 connectivity = session == "connectivity";
 
 required = ["naming.prefix" "segmentation.n_exclude" "stimulation.orange_start_v"];
-if connectivity
-    required(end+1) = "dmd.trigger_edge";
-end
 for path = required
     v = get_path(cfg, path);
     if isempty(v) || (isstring(v) && all(strlength(v) == 0))
@@ -56,7 +56,7 @@ else
     errors = [errors(:); reshape(spontaneous_errors(cfg), [], 1)];
 end
 
-skip = [required "trials.first" "trials.last" "dmd.trigger_edge"];
+skip = [required "trials.first" "trials.last" "spontaneous.n_blocks"];
 deviations = struct("path", {}, "yitong", {}, "value", {});
 for path = leaf_paths(reference)
     if ismember(path, skip) || ~used_by(path, session)
@@ -98,8 +98,8 @@ end
 
 function errors = connectivity_errors(cfg)
 errors = strings(0, 1);
-if ~isempty(cfg.dmd.trigger_edge) && strlength(cfg.dmd.trigger_edge) > 0 && ...
-        ~ismember(cfg.dmd.trigger_edge, ["rising" "falling"])
+if ~(isstring(cfg.dmd.trigger_edge) || ischar(cfg.dmd.trigger_edge)) ...
+        || ~ismember(string(cfg.dmd.trigger_edge), ["rising" "falling"])
     errors(end+1) = "dmd.trigger_edge must be ""rising"" or ""falling"".";
 end
 if ~isscalar(cfg.sparse.blue_v)
@@ -157,7 +157,7 @@ if startsWith(path, ["session." "behavior." "calibration_scan." "schema_version"
     tf = false;
     return
 end
-connectivity_only = ["dmd.picture_time_us" "matrix." "sparse." "hadamard." "trials." ...
+connectivity_only = ["dmd.picture_time_us" "dmd.trigger_edge" "matrix." "sparse." "hadamard." "trials." ...
     "stimulation.n_frames" "stimulation.n_patterns" "z_reference.enabled" ...
     "drift.enabled" "drift.retarget_every"];
 if session == "connectivity"

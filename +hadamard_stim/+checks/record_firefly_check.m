@@ -8,7 +8,8 @@ function file = record_firefly_check(file, result)
 %           slide_queue_check
 %
 %   The entry for result.name is replaced; the other checks are kept as they
-%   were. Each entry is {"passed", "evidence", "date", "details"}, what
+%   were. Each entry is {"passed", "evidence", "date", "details",
+%   "provenance"}, what
 %   hadamard_stim.metadata.hardware_gate reads. A failed check is recorded
 %   too, so the file says what was tried.
 arguments
@@ -23,10 +24,18 @@ if isfile(file)
     end
 end
 checks.(result.name) = struct("passed", result.passed, "evidence", result.evidence, ...
-    "date", result.date, "details", result.details);
+    "date", result.date, "details", result.details, ...
+    "provenance", field_or(result, "provenance", struct()));
 folder = fileparts(file);
 if strlength(folder) > 0 && ~isfolder(folder)
     mkdir(folder);
 end
 writelines(string(jsonencode(checks, "PrettyPrint", true)), file);
+end
+
+function v = field_or(s, name, default)
+v = default;
+if isfield(s, name)
+    v = s.(name);
+end
 end

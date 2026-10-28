@@ -24,17 +24,30 @@ function response = apply_controller_action(controller, action, payload, expecte
 %     run_preflight         read-only rig checks
 %     acquire_calibration_scans   his Hadamard calibration scans, on a slide
 %     calibrate_blue_led    the rig's slide calibration of the blue light
+%     run_commissioning_check   payload.name: one of the two DMD
+%                           commissioning checks, "queue_support" or
+%                           "slide_queue" (on a uniform slide), recorded
 %     prepare_rig           build the environment from the backend
 %     acquire_reference_image   one Hadamard scan, reconstructed
 %     set_reference_image   payload.image
 %     propose_cells, approve_cells, acquire_z_reference
 %     start_run             payload.run_folder (optional with a backend)
+%                           payload.acknowledged_warnings: the ids of the
+%                           readiness warnings the operator chose to go
+%                           ahead with (all of them, or the run refuses)
+%                           payload.operator_note (optional)
 %     resume_run            payload.run_folder (optional: the session's own)
 %                           payload.continue_with_changed_calibration: resume
 %                           although a calibration changed (recorded)
+%                           payload.acknowledged_warnings, operator_note: as
+%                           for start_run
 %     stop_after_current    finish the trial in progress, then stop
 %     abort                 abandon what the rig is doing; then release it
 %     new_session           start again on a new field of view
+%     start_orange_preview  show the approved cells' illumination mask on
+%                           the DMD with the orange LED at orange_start_v
+%                           (an operator aid; nothing is acquired)
+%     stop_orange_preview   LED off, DMD dark, rig released
 arguments
     controller (1, 1) hadamard_stim.HadamardStimController
     action (1, 1) string
@@ -42,9 +55,10 @@ arguments
     expected_revision = []
 end
 known = ["set_config" "update_config" "set_rig_settings" "run_preflight" ...
-    "acquire_calibration_scans" "calibrate_blue_led" "prepare_rig" ...
+    "acquire_calibration_scans" "calibrate_blue_led" "run_commissioning_check" "prepare_rig" ...
     "acquire_reference_image" "set_reference_image" "propose_cells" "approve_cells" ...
-    "acquire_z_reference" "start_run" "resume_run" "stop_after_current" "abort" "new_session"];
+    "acquire_z_reference" "start_run" "resume_run" "stop_after_current" "abort" "new_session" ...
+    "start_orange_preview" "stop_orange_preview"];
 if ~ismember(action, known)
     response = reply(controller, false, "unknown_action", ...
         "There is no action called '" + action + "'.", "");
@@ -78,6 +92,12 @@ try
             controller.acquireCalibrationScans();
         case "calibrate_blue_led"
             controller.calibrateBlueLed();
+        case "run_commissioning_check"
+            controller.runCommissioningCheck(string(payload.name));
+        case "start_orange_preview"
+            controller.startOrangePreview();
+        case "stop_orange_preview"
+            controller.stopOrangePreview();
         case "prepare_rig"
             controller.prepareRig();
         case "acquire_reference_image"
@@ -91,11 +111,13 @@ try
         case "acquire_z_reference"
             controller.acquireZReference();
         case "start_run"
-            controller.startRun(optional_folder(payload));
+            controller.startRun(optional_folder(payload), ...
+                AcknowledgedWarnings=acknowledged(payload), OperatorNote=note(payload));
         case "resume_run"
             controller.resumeRun(optional_folder(payload), ContinueWithChangedCalibration= ...
                 isfield(payload, "continue_with_changed_calibration") ...
-                && isequal(payload.continue_with_changed_calibration, true));
+                && isequal(payload.continue_with_changed_calibration, true), ...
+                AcknowledgedWarnings=acknowledged(payload), OperatorNote=note(payload));
         case "stop_after_current"
             controller.requestStop();
         case "abort"
@@ -114,6 +136,20 @@ function folder = optional_folder(payload)
 folder = "";
 if isfield(payload, "run_folder") && ~isempty(payload.run_folder)
     folder = string(payload.run_folder);
+end
+end
+
+function ids = acknowledged(payload)
+ids = strings(1, 0);
+if isfield(payload, "acknowledged_warnings") && ~isempty(payload.acknowledged_warnings)
+    ids = reshape(string(payload.acknowledged_warnings), 1, []);
+end
+end
+
+function text = note(payload)
+text = "";
+if isfield(payload, "operator_note") && ~isempty(payload.operator_note)
+    text = string(payload.operator_note);
 end
 end
 

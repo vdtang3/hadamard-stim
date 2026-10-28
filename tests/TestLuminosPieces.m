@@ -112,7 +112,7 @@ classdef TestLuminosPieces < matlab.unittest.TestCase
 
         function framesFollowTheTriggerRows(testCase)
             cfg = testCase.Cfg;
-            waveform = hadamard_stim.protocol.scan_waveform(cfg, 2.52, 0.47, 64);
+            waveform = hadamard_stim.protocol.scan_waveform(cfg, 2.52, 0.47, 64, camera_rows=328);
             spec = hadamard_stim.protocol.acquisition_spec("z_stack_plane", "f", waveform, ...
                 camera_exposure_ms=2.5);
             plan = hadamard_stim.luminos.camera_plan(spec, ["Teledyne Kinetix" "Grasshopper3"], ...

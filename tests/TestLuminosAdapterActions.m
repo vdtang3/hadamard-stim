@@ -57,7 +57,7 @@ classdef TestLuminosAdapterActions < matlab.unittest.TestCase
             n_scans = 0;
             lum_env.reconstruct_scan = @drift_image;
             report = lum_env.hw.begin(cfg);
-            testCase.assertTrue(report.ok, strjoin(report.failures, newline));
+            testCase.assertTrue(report.can_run, strjoin(report.failures, newline));
             lum_ref = hadamard_stim.protocol.run_z_reference(cfg, lum_env);
             lum_ref.had_ref = inputs.ref_im;
             [testCase.LumState, ~] = hadamard_stim.protocol.run_protocol(cfg, lum_env, ...
@@ -224,7 +224,7 @@ if acq.kind == "stimulation"
     waveform = hadamard_stim.protocol.stimulation_waveform(cfg, env, ...
         s.exposure_ms, s.orange_v, s.blue_v, s.params);
 else
-    waveform = hadamard_stim.protocol.scan_waveform(cfg, s.exposure_ms, s.orange_v, s.n_pat);
+    waveform = hadamard_stim.protocol.scan_waveform(cfg, s.exposure_ms, s.orange_v, s.n_pat, camera_rows=s.n_rows);
 end
 end
 

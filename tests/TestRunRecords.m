@@ -126,7 +126,9 @@ classdef TestRunRecords < matlab.unittest.TestCase
             cfg = hadamard_stim.default_config();
             report = hadamard_stim.validate_config(cfg);
             testCase.verifyFalse(report.ok);
-            testCase.verifyEqual(numel(report.errors), 4);
+            % prefix, n_exclude, orange start; the trigger edge is the protocol's.
+            testCase.verifyEqual(numel(report.errors), 3);
+            testCase.verifyFalse(any(contains(report.errors, "trigger_edge")));
             cfg.sparse.blue_v = [2 4];
             report = hadamard_stim.validate_config(cfg);
             testCase.verifyTrue(any(contains(report.errors, "sparse.blue_v")));

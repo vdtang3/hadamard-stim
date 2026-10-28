@@ -12,11 +12,12 @@ function methods_ = backend_interface()
 %     s = settings()               rig settings, JSON-safe (e.g. blue_threshold)
 %     set_settings(changes)        change some of them; errors, changing
 %                                  nothing, if any is invalid
-%     report = preflight(cfg)      read only: report.ok, report.checks (id,
-%                                  label, status pass/fail/not_needed,
-%                                  message), report.failures, and
-%                                  report.calibration (blue calibration
-%                                  status: valid/missing/invalid, identity)
+%     report = preflight(cfg)      read only: a readiness report
+%                                  (metadata.readiness_report: can_run,
+%                                  checks, blockers, warnings, info,
+%                                  failures), and report.calibration (blue
+%                                  calibration status: valid/missing/
+%                                  invalid, identity)
 %     env = environment(cfg)       what the protocol runs on (see
 %                                  hadamard_stim.protocol.run_protocol),
 %                                  with env.context for the recipe
@@ -36,10 +37,23 @@ function methods_ = backend_interface()
 %     r = record_calibration_scans(cfg, acquisitions)
 %                                  record them; r.folders become the scan
 %                                  calibration
+%     sets = calibration_scan_sets()
+%                                  earlier scan sets that could be reused
+%                                  (taken_utc, folders, camera_roi, bin,
+%                                  compatible, message, in_use)
+%     r = run_commissioning_check(name, cfg)
+%                                  run one DMD commissioning check
+%                                  ("queue_support", "slide_queue") and
+%                                  record it in the hardware validation file
+%     cam = imaging_camera()       the imaging camera as the Camera tab left
+%                                  it (read only): name, roi [x width y
+%                                  height], width, height, bin, frame_size
+%                                  [rows cols], bit_depth, bit_mode; [] when
+%                                  it cannot be read
 %
 %   Nothing here runs the experiment: every protocol step still goes
 %   through the environment's hardware (hadamard_stim.protocol.hardware_interface).
 methods_ = ["settings" "set_settings" "preflight" "environment" "diagnostics" ...
     "default_run_folder" "run_folders" "calibration_hardware" "record_calibration_scans" ...
-    "calibrate_blue_led"];
+    "calibrate_blue_led" "calibration_scan_sets" "run_commissioning_check" "imaging_camera"];
 end

@@ -63,6 +63,8 @@ classdef TestLuminosRunRecords < matlab.unittest.TestCase
             testCase.verifyEqual(string(recipe.standing_deviations), ...
                 hadamard_stim.luminos.firefly_profile().standing_deviations);
             testCase.verifyTrue(recipe.hardware_validation.slide_queue.passed);
+            % No warnings, so no override: the recipe does not claim one.
+            testCase.verifyEmpty(recipe.start_override);
             % Off the rig Luminos's own provenance helper is absent, and the
             % recipe says so instead of inventing a commit.
             testCase.verifyEqual(string(recipe.software.luminos.commit), "unavailable");
@@ -111,16 +113,46 @@ classdef TestLuminosRunRecords < matlab.unittest.TestCase
             testCase.verifyEqual(dmd.pattern_owner, "adaptive_optopatch");
         end
 
-        function withoutTheFireflyChecksNothingRuns(testCase)
+        function withoutTheFireflyChecksARunAsksOnceAndRecordsTheOverride(testCase)
+            % Never-run commissioning checks are warnings: the run refuses
+            % until all of them are acknowledged together, then starts, and
+            % the recipe says which were acknowledged. The trial records
+            % are as in any run.
             c = testCase.readySession(hardware_validation=[]);
+            warnings = c.getState().readiness.warnings;
+            ids = string({warnings.id});
+            testCase.verifyEqual(ids, "firefly_slide_queue");
+            testCase.verifyTrue(c.getState().readiness.can_run);
             r = hadamard_stim.apply_controller_action(c, "start_run", ...
                 struct("run_folder", testCase.RunFolder), c.Revision);
-            testCase.verifyEqual(r.identifier, "hadamard_stim:HardwareNotValidated");
+            testCase.verifyEqual(r.identifier, "hadamard_stim:WarningsNotAcknowledged");
+            testCase.verifySubstring(r.message, "firefly_slide_queue");
+            testCase.verifySubstring(r.message, "could differ from the patterns in the trial records");
             testCase.verifyFalse(isfolder(testCase.RunFolder));
+            % Acknowledging another warning is not enough.
+            r = hadamard_stim.apply_controller_action(c, "start_run", ...
+                struct("run_folder", testCase.RunFolder, "acknowledged_warnings", "config_deviations"), c.Revision);
+            testCase.verifyEqual(r.identifier, "hadamard_stim:WarningsNotAcknowledged");
+            testCase.verifyFalse(isfolder(testCase.RunFolder));
+
+            r = hadamard_stim.apply_controller_action(c, "start_run", ...
+                struct("run_folder", testCase.RunFolder, "acknowledged_warnings", ids, ...
+                "operator_note", "first Firefly test"), c.Revision);
+            testCase.assertTrue(r.ok, r.message);
+            recipe = jsondecode(fileread(fullfile(testCase.RunFolder, "run_recipe.json")));
+            o = recipe.start_override;
+            testCase.verifyTrue(o.operator_override);
+            testCase.verifyEqual(string(o.operator_note), "first Firefly test");
+            testCase.verifyEqual(string({o.warnings.id}), ids);
+            testCase.verifyNotEmpty(o.warnings(1).consequence);
+            testCase.verifyNotEmpty(o.acknowledged_utc);
+            trial = jsondecode(fileread(fullfile(testCase.RunFolder, "trials", "trial_0001.json")));
+            testCase.verifyEqual(string(trial.status), "completed");
+            testCase.verifyFalse(isfield(trial, "start_override"));
         end
 
         function anUncalibratedBlueRefusesTheEnvironment(testCase)
-            blue = testCase.App.getDevice("NI_DAQ_Modulator");
+            blue = testCase.App.getDevice("NI_DAQ_Modulator", "name", "Blue LED 488");
             blue.iscalibrated = false;
             testCase.verifyError(@() testCase.environment(), "hadamard_stim:RigNotReady");
             try
@@ -170,6 +202,9 @@ classdef TestLuminosRunRecords < matlab.unittest.TestCase
 end
 
 function v = passed_checks()
-passed = struct("passed", true, "evidence", "test", "date", "2026-10-14");
-v = struct("driver", passed, "trigger_edge", passed, "queue_support", passed, "slide_queue", passed);
+passed = struct("passed", true, "evidence", "test", ...
+    "date", string(datetime("now", "TimeZone", "UTC", "Format", "yyyy-MM-dd'T'HH:mm:ss'Z'")), ...
+    "details", struct("trigger_edge", "rising"), ...
+    "provenance", struct("hadamard_stim_commit", "unknown", "luminos_commit", "unknown", "dmd_serial", "unknown"));
+v = struct("queue_support", passed, "slide_queue", passed);
 end

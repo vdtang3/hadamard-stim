@@ -1,11 +1,14 @@
 function result = trigger_edge_check(app, profile)
-%TRIGGER_EDGE_CHECK Firefly check 2: the board's trigger edge right after Luminos starts.
+%TRIGGER_EDGE_CHECK Historical diagnostic: the board's trigger edge right after Luminos starts.
 %
 %   result = hadamard_stim.checks.trigger_edge_check(app)
 %
-%   Read before any stack or queue is loaded: this is the edge his loader
-%   inherited, and it becomes the configuration's dmd.trigger_edge
-%   (result.details.trigger_edge). Passes when the board reports one.
+%   Read before any stack or queue is loaded, this is the edge Yitong's
+%   loader inherited (it never set one). It is not readiness and nothing
+%   reads its record: the protocol sets its queue edge explicitly
+%   (cfg.dmd.trigger_edge, rising), and queue playback on a slide
+%   (slide_queue_check) verifies that edge on Firefly. Kept for
+%   investigating his data. Passes when the board reports an edge.
 arguments
     app
     profile struct = hadamard_stim.luminos.firefly_profile()
@@ -37,7 +40,7 @@ else
     passed = false;
 end
 result = hadamard_stim.checks.check_result("trigger_edge", passed, evidence, ...
-    struct("trigger_edge", edge, "raw", raw));
+    struct("trigger_edge", edge, "raw", raw), hadamard_stim.checks.check_provenance(app, profile));
 end
 
 function dmd = the_dmd(app, profile)

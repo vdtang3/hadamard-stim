@@ -30,7 +30,7 @@ folder = fileparts(file);
 if strlength(folder) > 0 && ~isfolder(folder)
     mkdir(folder);
 end
-writelines(string(jsonencode(checks, "PrettyPrint", true)), file);
+hadamard_stim.metadata.write_text(string(jsonencode(checks, "PrettyPrint", true)), file);
 end
 
 function v = field_or(s, name, default)

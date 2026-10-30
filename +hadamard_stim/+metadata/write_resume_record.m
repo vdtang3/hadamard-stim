@@ -46,5 +46,5 @@ if nargin < 6
 end
 out.operator_override = ~isempty(override);
 out.override = override;
-writelines(hadamard_stim.metadata.canonical_json(out), file);
+hadamard_stim.metadata.write_text(hadamard_stim.metadata.canonical_json(out), file);
 end

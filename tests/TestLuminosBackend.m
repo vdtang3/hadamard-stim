@@ -44,7 +44,7 @@ classdef TestLuminosBackend < matlab.unittest.TestCase
             checks = r.state.preflight.checks;
             ids = string({checks.id});
             testCase.verifyEqual(numel(unique(ids)), numel(ids));
-            testCase.verifyEqual(ids(1:2), ["rig" "luminos_idle"]);
+            testCase.verifyEqual(ids(1:3), ["package_path" "rig" "luminos_idle"]);
             testCase.verifyEqual(r.state.readiness.checks(1).id, "config");
             for id = ["device_dmd" "device_camera" "device_behavior_camera" "device_daq" ...
                     "device_stage" "device_blue_modulator" "dmd_board" "dmd_queue" "dmd_ownership" ...

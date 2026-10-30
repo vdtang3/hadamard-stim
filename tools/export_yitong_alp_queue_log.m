@@ -40,7 +40,7 @@ for load_ = loads
     lines = [lines; translate(a.alp_calls)]; %#ok<AGROW>
     lines(end+1, 1) = "end"; %#ok<AGROW>
 end
-writelines(lines, out_file);
+hadamard_stim.metadata.write_text(lines, out_file);
 end
 
 function lines = translate(calls)

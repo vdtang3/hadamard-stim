@@ -101,11 +101,18 @@ it is done once, or occasionally when the rig changes.
 
 ### First-time installation
 
-1. Put this repository on the MATLAB path in the rig's `startup.m`.
-2. Use a Luminos build with the ALP sequence queue (branch
+1. Put this repository on the MATLAB path in the rig's `startup.m` with
+   `run("C:\...\hadamard-stim\setup_project.m")` (or `addpath` of the
+   repository root alone). Never use "Add with Subfolders" / `genpath`:
+   `tests/golden/shims` holds test stand-ins that shadow MATLAB built-ins
+   (its `dir.m` breaks reading movies). `setup_project` removes any
+   subfolders it finds, and Check readiness blocks while any test-only
+   folder is on the path.
+2. MATLAB R2021b or later (Firefly runs R2021b).
+3. Use a Luminos build with the ALP sequence queue (branch
    `vdtang3/hadamard-stim`, `ALP_DMD.Load_Sequence_Queue`) and its
    `DMD_MEX` built on the rig PC.
-3. Add the device and tab to your user file for Firefly (Luminos
+4. Add the device and tab to your user file for Firefly (Luminos
    `src/Users/Vincent.json` does):
 
    ```json
@@ -118,7 +125,7 @@ it is done once, or occasionally when the rig changes.
    `blue_threshold` and `calibration_folders` can be set there or in the
    tab's rig settings. `blue_threshold` has no default: it is a power in
    the active blue calibration's own units (parity issue P2), not his 15.
-4. **Probe the ALP driver, with Luminos closed.** The probe opens the board
+5. **Probe the ALP driver, with Luminos closed.** The probe opens the board
    itself, which it cannot do while Luminos holds it, so this is not in the
    tab:
    1. Close Luminos.
@@ -241,6 +248,15 @@ acquisition cannot be made.
   brightness). A run can still be started, with a warning, to collect
   diagnostic data. Check the DAQ `dmdTrigger` line, the uniform slide and
   the camera exposure, then Run on slide again.
+- **The camera area is too tall** (Check readiness: "area fits the scans'
+  frames"): the rolling shutter takes 3.75 µs per row, so the 2.52 ms
+  reference, z-stack and drift scans fit at most 671 rows and the 11 ms
+  calibration and slide scans 2930. Choose the experiment's area (his was
+  328 × 448) in the Camera tab before Run on slide or the reference image;
+  the full 3200-row sensor does not fit.
+- **"Unrecognized field name bytes" or other odd failures in built-ins**:
+  a test folder of this repository is on the path (Check readiness blocks
+  on it). Run `setup_project`.
 - **Missing blue calibration**: calibrate the blue LED on the slide and set
   `blue_threshold`. His blue values are linearised intensities, not volts,
   so there is no uncalibrated fallback.

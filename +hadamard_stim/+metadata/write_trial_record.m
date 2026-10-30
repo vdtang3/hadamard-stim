@@ -7,6 +7,6 @@ if ~isfolder(folder)
     mkdir(folder);
 end
 file = fullfile(folder, sprintf("trial_%04d.json", record.trial));
-writelines(hadamard_stim.metadata.canonical_json( ...
+hadamard_stim.metadata.write_text(hadamard_stim.metadata.canonical_json( ...
     hadamard_stim.metadata.trial_record(record, recipe_hash)), file);
 end

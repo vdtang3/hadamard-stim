@@ -92,6 +92,16 @@ RANK = struct("pass", 0, "info", 1, "warning", 2, "blocker", 3);
             group=c.group, message=message);
     end
 
+% This package's own test code must not be on the path: the golden shims
+% shadow MATLAB built-ins (dir), and Yitong's frozen code the port.
+requirement("package_path", "Only the hadamard-stim root is on the MATLAB path", "session");
+stray = hadamard_stim.stray_path_folders();
+if ~isempty(stray)
+    found("blocker", sprintf("%d test-only hadamard-stim folders are on the MATLAB path, e.g. %s.", ...
+        numel(stray), stray(1)), ...
+        "Their stand-ins shadow MATLAB and package functions (tests/golden/shims/trace/dir.m replaces dir, so movies cannot be read). Run setup_project, which removes them, and add only the repository root in startup.m (not with subfolders).");
+end
+
 % The rig and the app.
 requirement("rig", "Luminos is running the " + profile.rig_name + " rig");
 if string(read(app, "rigName", "")) ~= profile.rig_name
@@ -286,6 +296,25 @@ if ~isempty(camera)
         found("warning", sprintf("%s is binned %g x.", camera.name, double(camera.bin)), ...
             "His scans and segmentation used 1 x 1 pixels: segmentation's cell-size settings and the scans assume unbinned pixels, so cells may be found differently.");
     end
+    % The area's rows set every scan's rolling-shutter blanking
+    % (scan_waveform); too tall, and no illumination fits in the frame.
+    requirement("camera_area", camera.name + " area fits the scans' frames");
+    roi = double(call(@() camera.getROIForAcquisition(), [0 0 0 0]));   % [x width y height]
+    rows = roi(4);
+    for scan = scan_periods(cfg, calibrating)
+        limit = hadamard_stim.protocol.max_scan_rows(scan.period_ms, cfg.daq.rate);
+        if rows > limit
+            found("blocker", sprintf(['The Camera tab''s area is %d rows tall; %s (%.2f ms frames) ' ...
+                'fit at most %d.'], rows, scan.name, scan.period_ms, limit), ...
+                sprintf(['The rolling shutter takes 3.75 us per row, so a taller area leaves no time ' ...
+                'to light the frame. Choose an area of at most %d rows in the Camera tab ' ...
+                '(Yitong''s was 328 x 448).'], limit));
+            break
+        end
+    end
+    if rows > 0
+        found("pass", sprintf("%d x %d px (from the Camera tab).", roi(2), rows));
+    end
 end
 
 % Calibrations: the active ones, as a run would resolve them. When each was
@@ -328,6 +357,27 @@ report.devices = devices;
         checks(current) = c;
         found("pass", age_text(age) + ".");
     end
+end
+
+function scans = scan_periods(cfg, calibrating)
+% The scans this purpose may build, shortest frame first: on a slide, the
+% calibration (and slide queue) scans; otherwise the reference and
+% z-stack scans, and drift correction's when the session drift-corrects.
+scans = struct("name", {}, "period_ms", {});
+if calibrating
+    scans(end+1) = struct("name", "the calibration scans", ...
+        "period_ms", cfg.calibration_scan.waveform_period_ms);
+    return
+end
+scans(end+1) = struct("name", "the reference and z-stack scans", "period_ms", cfg.scan.waveform_period_ms);
+spontaneous = hadamard_stim.metadata.session_mode(cfg) == "spontaneous";
+drift = (~spontaneous && cfg.drift.enabled) || (spontaneous && isequal(cfg.spontaneous.drift_correction, true));
+if drift
+    scans(end+1) = struct("name", "the drift-correction scans", ...
+        "period_ms", cfg.stimulation.camera_exposure_ms * cfg.drift.exposure_scale + .02);
+end
+[~, order] = sort([scans.period_ms]);
+scans = scans(order);
 end
 
 function t = age_text(age)

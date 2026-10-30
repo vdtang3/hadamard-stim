@@ -17,5 +17,5 @@ if ~isfolder(run_folder)
     mkdir(run_folder);
 end
 save(mat, "recipe", "arrays", "-v7.3");
-writelines(hadamard_stim.metadata.canonical_json(recipe), json);
+hadamard_stim.metadata.write_text(hadamard_stim.metadata.canonical_json(recipe), json);
 end

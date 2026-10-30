@@ -830,6 +830,53 @@ commissioning, run, resume and new-session path stop it first, as do
 Abort and the controller's `delete`. The LED is not a run requirement
 (`profile.orange_modulator`, outside `profile.devices`).
 
+## 2026-10-28: first Run on slide on Firefly (R2021b)
+
+Live sequence-queue support passed. Run on slide then hit, in order:
+
+1. **No hardware validation file.** Refused, correctly: the check records
+   its result there. The tab now disables both DMD checks while the rig
+   settings name no file, and says why next to them.
+2. **Full-sensor camera area (3200 rows).** `static_hadamard_waveform`
+   blanks 3.75 µs per row (12 ms) inside an 11 ms frame and asked
+   `baseWave.extend` for -1.01 ms: an indexing error. Now
+   `protocol.max_scan_rows(period, rate)` gives the tallest area a scan
+   frame can light (671 rows for the 2.52 ms reference, z-stack and drift
+   scans; 2930 for the 11 ms calibration and slide scans, whose lit window
+   is floor(11e-3/1e-5)*1e-5 = 10.99 ms in floating point, as in his
+   code). `scan_waveform` refuses a taller area with
+   `hadamard_stim:CameraAreaTooTall`, naming the limit, and preflight's
+   new `camera_area` item blocks for the scans the purpose will run, so
+   Run on slide is refused before the DMD or DAQ is touched. His 328 is
+   unchanged.
+3. **`tests/golden/shims/trace/dir.m` shadowed `dir`** (the repository had
+   been added with subfolders), so reading the slide movie failed with
+   "Unrecognized field name bytes". The golden generator and the tests
+   already restore the path; the leak was the install. `setup_project`
+   now removes any subfolder of the repository from the path (with a
+   warning), preflight blocks while `tests/golden` or
+   `tests/yitong_reference` is on it (`stray_path_folders`), the README
+   says to add the root only, and the GUI-state exporter restores the
+   path it changes (its Luminos stand-in shadows `luminos_session_info`).
+4. **`writelines` is R2022a.** It wrote the check's record, and also the
+   run recipe, trial, block and resume records and the calibration-scan
+   record, so a real run on R2021b would have failed at its first write.
+   All go through `metadata.write_text` (fopen/fprintf UTF-8, onCleanup).
+   A test scans the package for writelines and other post-R2021b
+   functions. `jsonencode(..., "PrettyPrint", true)` is R2021a, so it
+   stays.
+5. **"Run progress could not be sent: Cannot access method 'write'".**
+   `JS_Server.write` is private and always was, so the tab's progress
+   push (and Adaptive Optopatch's) never reached the browser; the tab
+   only updated when it asked. Luminos gains a public
+   `JS_Server.broadcast(event, data)` (as `notifyDeviceAvailabilityChanged`
+   already wrapped `write`), both devices use it, and a failing push is
+   now reported once per device.
+
+Still to see on the rig: Run on slide end to end at 328 rows on R2021b
+(movie read, classification, record written), and progress arriving in
+the tab during a run.
+
 ## Parity issues (behaviour that may be a bug; reproduced, not fixed)
 
 - **P1. Reference-image orientation changed after the experiments.** `hadamard_ref.m` gained a transpose on 2026-02-10, after his 2025 data, alongside a Kinetix MEX change. In the newest snapshot, segmentation would run on the transposed image while drift correction compares untransposed scans with the untransposed `hadamard_ref`. The fixtures follow his 2025-03-08 session, which is the untransposed behaviour he actually ran. In Luminos the reference image, scans and DMD calibration must all share Luminos's camera orientation. **Confirmed 2026-10-13: the port follows the untransposed 2025 behaviour.** The transposed `hadamard_ref.m` stays frozen only as evidence.

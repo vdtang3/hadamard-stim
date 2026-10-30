@@ -35,6 +35,10 @@ arguments
 end
 here = fileparts(mfilename("fullpath"));
 root = fileparts(fileparts(here));
+% The Luminos stand-in shadows luminos_session_info: put the path back
+% however this ends, so it never outlives the export.
+original = path;
+restore = onCleanup(@() path(original)); %#ok<NASGU>
 addpath(root, fullfile(root, "tests", "support"), fullfile(here, "luminos_shim"));
 if ~isfolder(out_folder)
     mkdir(out_folder);
@@ -49,7 +53,7 @@ for name = string(fieldnames(scenarios))'
     mkdir(folder);
     cleanup = onCleanup(@() rmdir(folder, "s"));
     out = scenario(root, folder, scenarios.(name));
-    writelines(string(jsonencode(out, "PrettyPrint", true)), fullfile(out_folder, name + ".json"));
+    hadamard_stim.metadata.write_text(string(jsonencode(out, "PrettyPrint", true)), fullfile(out_folder, name + ".json"));
     fprintf("%s: %d blockers, %d warnings\n", name, numel(out.state.readiness.blockers), ...
         numel(out.state.readiness.warnings));
     clear cleanup
@@ -79,7 +83,7 @@ end
 if s.dmd_changed
     records.slide_queue.provenance.luminos_commit = "a36342a70c1d9e8f2b7a6c5d4e3f2a1b0c9d8e7f";
 end
-writelines(string(jsonencode(records, "PrettyPrint", true)), file);
+hadamard_stim.metadata.write_text(string(jsonencode(records, "PrettyPrint", true)), file);
 
 % The blue LED calibrated on the slide 9 days ago, the DMD 4 months ago.
 blue = app.getDevice("NI_DAQ_Modulator", "name", "Blue LED 488");
@@ -122,7 +126,7 @@ record = struct("kind", "hadamard_stim_calibration_scan", "schema_version", "1.0
     "taken_utc", stamp(now_utc - days(21)), "settings", cfg.calibration_scan, "m_q", cfg.scan.m_q, ...
     "camera", struct("name", "Teledyne Kinetix", "roi", roi, "bin", 1), ...
     "dmd", "DMD (shared)", "folders", scans, "waveform_sha256", "");
-writelines(hadamard_stim.metadata.canonical_json(record), fullfile(scans, "hadamard_calibration_scan.json"));
+hadamard_stim.metadata.write_text(hadamard_stim.metadata.canonical_json(record), fullfile(scans, "hadamard_calibration_scan.json"));
 if s.dmd_changed
     changed = @(~, ~) deal(true, "src/Devices/Patterning/DMD/ALP/ALP_DMD.m");
 else

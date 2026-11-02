@@ -78,6 +78,9 @@ classdef HadamardStimController < handle
         % The orange preview while it is on (startOrangePreview): what is
         % shown and at what level; [] when off.
         OrangePreview = []
+        % The last orange mask export (exportOrangeMask): files, hash, when;
+        % [] before one.
+        OrangeMaskExport = []
     end
 
     properties
@@ -311,6 +314,42 @@ classdef HadamardStimController < handle
             obj.notifyStatus();
         end
 
+        function files = exportOrangeMask(obj, file_stem)
+            % Save the approved cells' orange illumination mask (Cells.
+            % illum_mask: the array startOrangePreview shows and the trials
+            % use) as <stem>.mat and <stem>.png, with its provenance, so it
+            % can be projected from Luminos's own DMD tab (pattern function
+            % "Hadamard Stim Orange Mask") for an ordinary acquisition. Files
+            % only: the rig is not begun, the DMD and LED are not touched,
+            % and the session does not change; a preview that is on stays on.
+            % file_stem defaults to <data folder>/<HHmmss>_<prefix>_orange_mask.
+            arguments
+                obj
+                file_stem (1, 1) string = ""
+            end
+            if obj.Activity ~= "" || ~ismember(obj.LifecycleState, ["CELLS_APPROVED" "READY"]) ...
+                    || isempty(obj.Cells) || ~isfield(obj.Cells, "illum_mask")
+                error("hadamard_stim:NoCells", "Approve the cells first: the export is their illumination mask.");
+            end
+            if strlength(file_stem) == 0
+                if isempty(obj.Backend)
+                    error("hadamard_stim:NoFolder", "Say where to save the orange mask (no rig backend to choose a folder).");
+                end
+                % The data folder runs default to (default_run_folder's parent).
+                folder = fileparts(obj.Backend.default_run_folder(obj.Config));
+                name = strjoin([string(datetime("now", "Format", "HHmmss")) ...
+                    obj.Config.naming.prefix "orange_mask"], "_");
+                file_stem = fullfile(folder, strrep(name, "__", "_"));
+            end
+            created = utc_text(datetime("now", "TimeZone", "UTC"));
+            files = hadamard_stim.metadata.write_orange_mask(file_stem, obj.Cells.illum_mask, ...
+                obj.orangeMaskInfo(created));
+            obj.OrangeMaskExport = struct("created_utc", created, "mat", files.mat, "png", files.png, ...
+                "n_cells", size(obj.Cells.cell_coord, 1), ...
+                "mask_sha256", hadamard_stim.metadata.sha256(obj.Cells.illum_mask));
+            obj.bump();
+        end
+
         function stopOrangePreview(obj)
             % Safe to call at any time, any number of times.
             if isempty(obj.OrangePreview)
@@ -542,6 +581,7 @@ classdef HadamardStimController < handle
                     "folders", r.folders, "camera_roi", r.camera.roi, "label", r.settings.label);
             end
             state.orange_preview = obj.OrangePreview;
+            state.orange_mask_export = obj.OrangeMaskExport;
             state.imaging_camera = [];
             if ~isempty(obj.Backend)
                 state.imaging_camera = obj.Backend.imaging_camera();
@@ -580,6 +620,9 @@ classdef HadamardStimController < handle
             legal.start_orange_preview = backend && env && idle && ~previewing ...
                 && ismember(s, ["CELLS_APPROVED" "READY"]) && ~isempty(obj.Cells);
             legal.stop_orange_preview = previewing;
+            % Files only, so a preview being on does not matter.
+            legal.export_orange_mask = obj.Activity == "" && ismember(s, ["CELLS_APPROVED" "READY"]) ...
+                && ~isempty(obj.Cells) && (backend || env);
         end
 
         function tf = hasEnvironment(obj)
@@ -588,6 +631,48 @@ classdef HadamardStimController < handle
     end
 
     methods (Access = private)
+        function info = orangeMaskInfo(obj, created)
+            % What the exported mask is and where it came from. Read from
+            % the session; the camera is read as the Camera tab has it now
+            % (Backend.imaging_camera, read only), nothing is begun.
+            cells = obj.Cells;
+            n = size(cells.cell_coord, 1);
+            info = struct();
+            info.kind = "hadamard_stim_orange_mask";
+            info.schema_version = "1.0.0";
+            info.created_utc = created;
+            info.description = "Cells.illum_mask: the approved cells' orange illumination, " + ...
+                "DMD canvas (rows x cols, as DMD.Target / Pattern_Canvas_Size), true = mirror on. " + ...
+                "The array the orange preview shows (dmd_show_mask) and the trials use.";
+            info.how_to_load = "Luminos DMD tab, pattern function ""Hadamard Stim Orange Mask"" " + ...
+                "(Preset_pattern/pdHadamard_Stim_Orange_Mask.m), Mask file = this .mat. " + ...
+                "From the command line: dmd.Target = load(file).mask; dmd.Write_Static().";
+            info.cells = struct("cell_id", (1:n)', "cell_coord_xy", cells.cell_coord, ...
+                "illum_rois", field_or(cells, "illum_rois", []), ...
+                "excluded_coord_xy", field_or(cells, "excluded_coord", []), ...
+                "threshold", field_or(cells, "threshold", []), ...
+                "n_exclude", field_or(cells, "n_exclude", []), ...
+                "illum_spot_size", obj.Config.segmentation.illum_spot_size, ...
+                "rasterization", "auto_square");
+            info.reference = struct("source", obj.ReferenceSource, ...
+                "image_size", size(obj.ReferenceImage), "image", single(obj.ReferenceImage));
+            info.dmd_calibration = [];
+            if isfield(obj.Env, "geometry") && isfield(obj.Env.geometry, "identity")
+                info.dmd_calibration = obj.Env.geometry.identity;
+            end
+            info.imaging_format_prepared = [];
+            if isfield(obj.Env, "context") && isfield(obj.Env.context, "hardware") ...
+                    && isfield(obj.Env.context.hardware, "imaging_format")
+                info.imaging_format_prepared = obj.Env.context.hardware.imaging_format;
+            end
+            info.camera_now = [];
+            if ~isempty(obj.Backend)
+                info.camera_now = obj.Backend.imaging_camera();
+            end
+            info.orange_start_v = obj.Config.stimulation.orange_start_v;
+            info.recipe_note = "A run's recipe records the same mask as cells.illum_mask_sha256.";
+        end
+
         function run(obj, state)
             obj.LifecycleState = "RUNNING";
             obj.Activity = "running";
@@ -1272,6 +1357,26 @@ for name = ["blue" "geometry"]
             details=struct("recorded", comparison.(name).recorded, "current", comparison.(name).current)); %#ok<AGROW>
     end
 end
+if isfield(comparison, "imaging_format") && isequal(comparison.imaging_format.matches, false)
+    was = comparison.imaging_format.recorded;
+    now_ = comparison.imaging_format.current;
+    items(end+1) = hadamard_stim.metadata.readiness_item("camera_format_changed", ...
+        "Camera bit depth changed since the run started", "blocker", group="rig", ...
+        message="The run recorded " + format_text(was) + "; the camera now records " + ...
+        format_text(now_) + ".", ...
+        consequence="The checkpoint's bleaching reference (b0) and reference images are in the " + ...
+        "recorded mode's counts, so the orange correction would be scaled wrongly and the run's " + ...
+        "movies would mix two modes. Switch the Camera tab back to the recorded mode.", ...
+        details=struct("recorded", was, "current", now_));
+end
+end
+
+function t = format_text(format)
+% "raw 8-bit frames (uint8), 8-bit (Speed)": a camera_format, as said.
+t = string(format.description);
+if strlength(string(format.mode_label)) > 0
+    t = t + ", " + string(format.mode_label);
+end
 end
 
 function override = acknowledged(readiness, ids, note, how)
@@ -1307,5 +1412,12 @@ function s = singular_verb(n)
 s = "";
 if n == 1
     s = "s";
+end
+end
+
+function v = field_or(s, name, default)
+v = default;
+if isfield(s, name)
+    v = s.(name);
 end
 end

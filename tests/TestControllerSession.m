@@ -171,6 +171,34 @@ classdef TestControllerSession < matlab.unittest.TestCase
             testCase.verifyEqual(trial_records(other), straight);
         end
 
+        function resumingInAnotherCameraModeIsRefused(testCase)
+            % The checkpoint's bleaching reference and reference images are
+            % in the recorded mode's counts: resuming in another blocks.
+            [c, cfg, ref] = testCase.session();
+            cfg.trials.last = 3;
+            testCase.ready(c, cfg, ref);
+            c.Env.context.hardware = struct("imaging_format", hadamard_stim.luminos.camera_format(16));
+            c.StatusChangedFcn = @(ctrl) abort_in(ctrl, 2);
+            c.startRun(testCase.Folder);
+            c.StatusChangedFcn = [];
+            testCase.assertEqual(c.LifecycleState, "ABORTED");
+            recipe = hadamard_stim.metadata.read_recipe(testCase.Folder);
+            testCase.verifyEqual(recipe.hardware.imaging_format.storage_bits, 16);
+            c.Env.context.hardware.imaging_format = hadamard_stim.luminos.camera_format(8);
+            r = hadamard_stim.apply_controller_action(c, "resume_run", ...
+                struct("continue_with_changed_calibration", true), c.Revision);
+            testCase.verifyEqual(r.status, "failed");
+            testCase.verifyEqual(r.identifier, "hadamard_stim:HardwareNotReady");
+            testCase.verifySubstring(r.message, ...
+                "The run recorded raw 16-bit frames (uint16); the camera now records raw 8-bit frames (uint8).");
+            testCase.verifyEqual(c.LifecycleState, "ABORTED");
+            % Back in the recorded mode, it resumes.
+            c.Env.context.hardware.imaging_format = hadamard_stim.luminos.camera_format(16);
+            r = hadamard_stim.apply_controller_action(c, "resume_run", struct(), c.Revision);
+            testCase.verifyTrue(r.ok, r.message);
+            testCase.verifyEqual(c.LifecycleState, "COMPLETED");
+        end
+
         function aChangedCalibrationNeedsConfirmingAndIsRecorded(testCase)
             % Resuming on a different calibration is a warning: it goes
             % ahead only when confirmed, and the override is recorded.

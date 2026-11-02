@@ -48,6 +48,10 @@ function response = apply_controller_action(controller, action, payload, expecte
 %                           the DMD with the orange LED at orange_start_v
 %                           (an operator aid; nothing is acquired)
 %     stop_orange_preview   LED off, DMD dark, rig released
+%     export_orange_mask    save the approved cells' orange DMD mask
+%                           (Cells.illum_mask) as .mat and .png, for
+%                           Luminos's own DMD tab; files only, no hardware.
+%                           payload.file_stem (optional with a backend)
 arguments
     controller (1, 1) hadamard_stim.HadamardStimController
     action (1, 1) string
@@ -58,7 +62,7 @@ known = ["set_config" "update_config" "set_rig_settings" "run_preflight" ...
     "acquire_calibration_scans" "calibrate_blue_led" "run_commissioning_check" "prepare_rig" ...
     "acquire_reference_image" "set_reference_image" "propose_cells" "approve_cells" ...
     "acquire_z_reference" "start_run" "resume_run" "stop_after_current" "abort" "new_session" ...
-    "start_orange_preview" "stop_orange_preview"];
+    "start_orange_preview" "stop_orange_preview" "export_orange_mask"];
 if ~ismember(action, known)
     response = reply(controller, false, "unknown_action", ...
         "There is no action called '" + action + "'.", "");
@@ -98,6 +102,12 @@ try
             controller.startOrangePreview();
         case "stop_orange_preview"
             controller.stopOrangePreview();
+        case "export_orange_mask"
+            stem = "";
+            if isfield(payload, "file_stem") && ~isempty(payload.file_stem)
+                stem = string(payload.file_stem);
+            end
+            controller.exportOrangeMask(stem);
         case "prepare_rig"
             controller.prepareRig();
         case "acquire_reference_image"

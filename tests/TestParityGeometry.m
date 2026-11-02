@@ -46,14 +46,53 @@ classdef TestParityGeometry < matlab.unittest.TestCase
             end
         end
 
-        function tiedMaximaStillFail(testCase)
-            % P4: reproduced, not fixed.
+        function aMaximumValueElsewhereInTheImageIsIgnored(testCase)
+            % P4, Firefly 2026-10-30: region 366's maximum also occurred at
+            % a pixel 190 rows away, and his whole-image search returned two
+            % pixels for one cell. Copy a kept cell's maximum value onto the
+            % nearest-valued pixel far from it that is not a peak itself:
+            % the cells are unchanged.
+            im = synthetic_reference_image();
+            [x, y] = hadamard_stim.yitong.static_image_seg_v5(im, 320, 5);
+            v = im(y(1), x(1));
+            [rr, cc] = ndgrid(1:size(im, 1), 1:size(im, 2));
+            far = hypot(rr - y(1), cc - x(1)) > 50 & im < imdilate(im, ones(3));
+            gap = abs(im - v);
+            gap(~far) = Inf;
+            [~, k] = min(gap(:));
+            tied = im;
+            tied(k) = v;
+            testCase.assertEqual(nnz(tied == v), 2, "the value now occurs twice");
+            [x2, y2] = hadamard_stim.yitong.static_image_seg_v5(tied, 320, 5);
+            testCase.verifyEqual([x2 y2], [x y]);
+        end
+
+        function integerImagesSegment(testCase)
+            % P4: the integer image his code failed on (the fixture records
+            % his error) now segments, each cell at its own region's maximum.
+            testCase.verifySubstring(testCase.Segmentation.integer_image_error, "different number of elements");
+            im = round(synthetic_reference_image());
+            [x, y] = hadamard_stim.yitong.static_image_seg_v5(im, 320, 0);
+            testCase.verifySize(x, [320 1]);
+            testCase.verifyEqual(size(unique([x y], "rows"), 1), 320, "one pixel per cell");
+            testCase.verifyEqual([x y], round([x y]));
+        end
+
+        function aBlankImageSaysNoCellsWereDetected(testCase)
+            % A slide with nothing on it: too few regions to rank.
+            testCase.verifyError(@() hadamard_stim.yitong.static_image_seg_v5( ...
+                100 * ones(328, 448), 320, 0), "hadamard_stim:TooFewRegions");
+            % Enough regions, too few candidates for the cells asked for.
+            im = synthetic_reference_image();
             try
-                hadamard_stim.yitong.static_image_seg_v5(round(synthetic_reference_image()), 320, 0);
-                testCase.verifyFail("A tied maximum no longer errors.");
+                hadamard_stim.yitong.static_image_seg_v5(im, 5000, 0);
+                testCase.verifyFail("Asking for more cells than candidates did not error.");
             catch err
-                testCase.verifyEqual(string(err.message), testCase.Segmentation.integer_image_error);
+                testCase.verifyEqual(string(err.identifier), "hadamard_stim:TooFewCandidates");
+                testCase.verifySubstring(string(err.message), "No cells detected");
             end
+            % thres + n_exclude is exactly what it needs, and min_val thres + 99.
+            [~, ~, ~] = hadamard_stim.yitong.static_image_seg_v5(im, 50, 5);
         end
 
         function spotsReproduceHisSavedRois(testCase)

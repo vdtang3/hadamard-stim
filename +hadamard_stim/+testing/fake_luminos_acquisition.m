@@ -58,7 +58,7 @@ for k = 1:numel(cameras)
         "frames", c.frames_requested, "exposure_s", c.acquisition_exposuretime, ...
         "roi", c.getROIForAcquisition()); %#ok<AGROW>
     roi = c.getROIForAcquisition();
-    bytes = c.frames_requested * roi(2) * roi(4) * 2;
+    bytes = c.frames_requested * roi(2) * roi(4) * c.bit_depth / 8;
     % Sparse: all zeros, and no disk or (on tmpfs) memory until written.
     file = java.io.RandomAccessFile(fullfile(folder, sprintf('frames%d.bin', k)), "rw");
     file.setLength(bytes);

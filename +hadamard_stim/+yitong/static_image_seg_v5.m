@@ -14,15 +14,23 @@ function [x_out, y_out, min_val, excluded] = static_image_seg_v5(im, thres, n_ex
 %   n_exclude (figure 51). excluded is [x y] of the n_exclude skipped
 %   candidates, in ascending contrast, for display and the record only.
 %
-%   Behaviour kept for parity (notebook, P4): it errors when two region
-%   maxima tie in value, and when there are fewer than 1000 watershed
-%   regions.
+%   P4 (notebook): his code looked for each region's maximum value in the
+%   whole image, and errored when that value also occurred at any other
+%   pixel. The port looks only inside the region, taking its first
+%   maximum pixel (column-major) when the region holds the value twice.
+%   Where his code ran, the value occurred once, inside the region, so
+%   every result he could get is unchanged. Too few watershed regions
+%   (1000) or candidates (thres plus n_exclude, and thres + 99 for
+%   min_val) still refuse, with errors that say so.
 %
 %   Port of tests/yitong_reference/dragonfly/Utilities/static_image_seg_v5.m
 %   SHA-256 81da03515d32a6aeb8184b8eedfe5839c28ad8db18b4b1e8f6a49c0a985246a6
 %   Changes: n_exclude is an argument instead of input(); min_val is
 %   returned instead of plotted; the skipped candidates are returned
-%   (excluded); figures and commented-out code removed.
+%   (excluded); figures and commented-out code removed; a region's maximum
+%   pixel is found within the region (P4); too few regions or candidates
+%   raise hadamard_stim:TooFewRegions / TooFewCandidates instead of an
+%   indexing error.
 arguments
     im {mustBeNumeric}
     thres (1, 1) double = 50
@@ -67,6 +75,12 @@ x = areas;
 y = pxl_contrast;
 
 nROILim = 1000;
+if numel(y) < nROILim
+    error("hadamard_stim:TooFewRegions", ...
+        ['No cells detected: the reference image has %d watershed regions and segmentation ' ...
+         'ranks the top %d. Choose another FOV, or check that the reference image shows the sample.'], ...
+        numel(y), nROILim);
+end
 pxlContrastSort = sort(y,'descend');
 goodROI = y > pxlContrastSort(nROILim) & x' > 10;
 goodROIIdx = find(goodROI);
@@ -75,12 +89,21 @@ for j = 1:sum(goodROI)
     L2(L(:) == goodROIIdx(j)) = j;
 end
 
-pxl = regionprops(L2,imRef,'Pixelvalues');
+needed = thres + max(n_exclude, 99);
+if sum(goodROI) < needed
+    error("hadamard_stim:TooFewCandidates", ...
+        ['No cells detected: segmentation found %d candidate cells and needs %d (%d to keep, ' ...
+         'segmentation.threshold, after skipping %d, and %d for the min_val curve). ' ...
+         'Choose another FOV or lower segmentation.threshold.'], ...
+        sum(goodROI), needed, thres, n_exclude, thres + 99);
+end
+pxl = regionprops(L2,imRef,'Pixelvalues','PixelIdxList');
 ctr_val = arrayfun(@(x) max(x.PixelValues),pxl);
 ctr_r = zeros(sum(goodROI),1);
 ctr_c = zeros(sum(goodROI),1);
 for j = 1:sum(goodROI)
-[ctr_r(j),ctr_c(j)] = ind2sub(size(imRef),find(ismember(imRef(:),ctr_val(j))));
+idx = pxl(j).PixelIdxList(pxl(j).PixelValues == ctr_val(j));   % P4: within the region
+[ctr_r(j),ctr_c(j)] = ind2sub(size(imRef),idx(1));
 end
 
 pxl_avg = arrayfun(@(x) mean(maxk(x.PixelValues,5)),pxl);

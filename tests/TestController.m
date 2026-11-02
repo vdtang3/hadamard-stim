@@ -79,6 +79,19 @@ classdef TestController < matlab.unittest.TestCase
             testCase.verifyFalse(recipe.simulated);
         end
 
+        function segmentingABlankImageReportsNoCells(testCase)
+            % Firefly 2026-10-30, a test slide: the tab must say why.
+            [c, cfg] = testCase.session();
+            c.setConfig(cfg);
+            c.setReferenceImage(100 * ones(328, 448));
+            r = hadamard_stim.apply_controller_action(c, "propose_cells", struct(), c.Revision);
+            testCase.verifyFalse(r.ok);
+            testCase.verifyEqual(r.identifier, "hadamard_stim:TooFewRegions");
+            testCase.verifySubstring(r.message, "No cells detected");
+            testCase.verifyEqual(c.LifecycleState, "CONFIGURING");
+            testCase.verifyEmpty(c.Proposal);
+        end
+
         function staleAndUnknownRequestsChangeNothing(testCase)
             [c, cfg] = testCase.session();
             before = c.Revision;

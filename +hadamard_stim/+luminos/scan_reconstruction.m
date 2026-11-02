@@ -1,13 +1,19 @@
-function [reconstruct_scan, reconstruct_z_stack, scorr] = scan_reconstruction(m_q, calibration_movies)
+function [reconstruct_scan, reconstruct_z_stack, scorr] = scan_reconstruction(m_q, calibration_movies, options)
 %SCAN_RECONSTRUCTION How the rig turns its scan acquisitions into Hadamard images.
 %
 %   [reconstruct_scan, reconstruct_z_stack, scorr] = ...
 %       hadamard_stim.luminos.scan_reconstruction(m_q, calibration_movies)
+%   ... = scan_reconstruction(..., offset=format.offset)
 %
 %   m_q                 cfg.scan.m_q
-%   calibration_movies  cell of uint16 [rows x cols x frames]: the Hadamard
+%   calibration_movies  cell of uint8 or uint16 [rows x cols x frames]: the Hadamard
 %                       calibration scans (his "had_cal" acquisitions), as
 %                       recorded by the imaging camera
+%   offset              the camera's dark offset in their mode's counts
+%                       (camera_format f.offset); his 100 if not given.
+%                       The scans are in the same mode (LuminosRig refuses
+%                       a mode change in a session; scan sets from another
+%                       mode do not fit), so it is theirs too.
 %
 %   reconstruct_scan(acq)     one drift scan, as his drift correction
 %                             reconstructed it (dmd_hadamard_reconstruct)
@@ -18,21 +24,33 @@ function [reconstruct_scan, reconstruct_z_stack, scorr] = scan_reconstruction(m_
 %   movies LuminosRig recorded (acq.imaging.file) instead of his
 %   Sq_camera.bin folders. The calibration is computed once, as his app
 %   cached it.
-scorr = hadamard_stim.yitong.hadamard_pinhole_calibration(m_q, calibration_movies);
+arguments
+    m_q
+    calibration_movies cell
+    options.offset (1, 1) double = 100
+end
+offset = options.offset;
+if ~isfinite(offset)
+    error("hadamard_stim:UnknownCameraOffset", ...
+        ['The camera''s dark offset in the calibration scans'' mode is not known, so they ' ...
+         'cannot be reconstructed. Measure it (dark frames in that mode) and add it to ' ...
+         'firefly_profile camera_offsets, or record the scans in a mode listed there.']);
+end
+scorr = hadamard_stim.yitong.hadamard_pinhole_calibration(m_q, calibration_movies, offset);
 reconstruct_scan = @(acq) hadamard_stim.yitong.dmd_hadamard_reconstruct_core( ...
-    m_q, {movie(acq)}, scorr);
+    m_q, {movie(acq)}, scorr, offset);
 reconstruct_z_stack = @z_stack;
 
     function had_all = z_stack(acqs)
         % One plane at a time: a z-stack is 21 movies of ~190 MB each.
         had_all = [];
         for k = 1:numel(acqs)
-            had = hadamard_stim.yitong.hadamard_reconstruct_core(m_q, {movie(acqs(k))}, scorr);
+            had = hadamard_stim.yitong.hadamard_reconstruct_core(m_q, {movie(acqs(k))}, scorr, offset);
             had_all = cat(3, had_all, had);
         end
     end
 end
 
 function mov = movie(acq)
-mov = hadamard_stim.luminos.read_frames(acq.imaging.file, acq.imaging.frame_size);
+mov = hadamard_stim.luminos.acquisition_frames(acq);
 end

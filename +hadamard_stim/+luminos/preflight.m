@@ -269,7 +269,7 @@ if spontaneous && ~calibrating
     requirement("block_memory", "One spontaneous block fits in memory");
     [need, detail] = hadamard_stim.luminos.block_memory(cfg, face_camera, encoder);
     available = available_memory();
-    checks(current).message = sprintf("About %.1f GB while a block runs (%s).", need / 2^30, detail);
+    checks(current).message = string(sprintf("About %.1f GB while a block runs (%s).", need / 2^30, detail));
     if isfinite(available) && need > 0.8 * available
         found("blocker", sprintf("Only %.1f GB is free.", available / 2^30), ...
             "Running out of memory mid-acquisition can leave the rig's outputs in an unknown state; use shorter blocks (spontaneous.block_frames) or free memory.");
@@ -281,16 +281,24 @@ end
 % Cameras.
 camera = devices.camera;
 if ~isempty(camera)
-    requirement("camera_settings", camera.name + " records raw, unbinned, 16-bit frames");
-    if string(read(camera, "compression_method", "None")) ~= "None"
-        found("blocker", sprintf("%s records with %s compression.", camera.name, string(camera.compression_method)), ...
+    requirement("camera_settings", camera.name + " records raw, unbinned, 8- or 16-bit frames");
+    % camera_format: Camera.bit_depth is what each pixel takes in the
+    % recording, read back from the camera; the mode's label is shown only.
+    format = hadamard_stim.luminos.camera_format(camera);
+    if format.compression ~= "None"
+        found("blocker", sprintf("%s records with %s compression.", camera.name, format.compression), ...
             "The package reads raw frames; a compressed movie cannot be read or reconstructed. Set compression to None.");
-    end
-    storage = double(read(camera, "bit_depth", 16));
-    if storage ~= 16
-        found("blocker", sprintf("%s stores %g-bit frames (Bit Depth: %s).", camera.name, storage, ...
-            string(read(camera, "bit_mode_label", "?"))), ...
-            "The package reads 16-bit frames; another storage depth would be misread. Choose a 16-bit Bit Depth mode in the Camera tab.");
+    elseif ~format.supported
+        found("blocker", sprintf("%s stores %s (Bit Depth: %s).", camera.name, format.description, ...
+            format.mode_label), ...
+            "The package reads raw 8- or 16-bit frames; another storage depth would be misread. Choose an 8- or 16-bit Bit Depth mode in the Camera tab.");
+    elseif ~format.offset_known
+        found("blocker", sprintf("%s records %s in a mode with no measured dark offset (Bit Depth: %s, id %s).", ...
+            camera.name, format.description, mode_text(format), format.mode_id), ...
+            "The calibration and every Hadamard reconstruction subtract the camera's dark offset in the mode's counts; his 100 is a 16-bit level, and an 8-bit mode sits far lower (about 20 in 8-bit High Full Well), so a guess would erase or bias the scans. Choose a listed mode, or measure this one's dark frames and add it to firefly_profile camera_offsets.");
+    else
+        found("pass", sprintf("%s records %s: supported. Mode: %s; dark offset %g counts (%s).", ...
+            camera.name, format.description, mode_text(format), format.offset, format.offset_source));
     end
     if double(read(camera, "bin", 1)) ~= 1
         found("warning", sprintf("%s is binned %g x.", camera.name, double(camera.bin)), ...
@@ -315,6 +323,25 @@ if ~isempty(camera)
     if rows > 0
         found("pass", sprintf("%d x %d px (from the Camera tab).", roi(2), rows));
     end
+    % The session's movies on disk, at this area and depth.
+    if format.supported && ~calibrating
+        requirement("imaging_storage", "The session's movies on the data disk");
+        frame_size = floor([roi(4) roi(2)] ./ max(1, double(read(camera, "bin", 1))));
+        [need, largest, detail] = hadamard_stim.luminos.imaging_storage(cfg, frame_size, format);
+        free = free_disk(string(read(app, "datafolder", "")));
+        checks(current).details = struct("bytes", need, "largest_bytes", largest, ...
+            "free_bytes", free, "bytes_per_pixel", format.bytes_per_pixel);
+        checks(current).message = string(sprintf("About %.1f GB of movies (%s).", need / 1e9, detail));
+        % An estimate, so it informs rather than gates: Luminos is the one
+        % that fails when the disk fills.
+        if isfinite(free) && need > free
+            found("info", sprintf("Only %.0f GB is free (the largest movie is %.1f GB).", ...
+                free / 1e9, largest / 1e9), ...
+                "The session stops partway when the disk fills. Free space, or record a smaller camera area, 8-bit frames or fewer trials/blocks.");
+        elseif isfinite(free)
+            checks(current).message = string(checks(current).message) + sprintf(" %.0f GB free.", free / 1e9);
+        end
+    end
 end
 
 % Calibrations: the active ones, as a run would resolve them. When each was
@@ -325,6 +352,7 @@ if ~isempty(devices.blue_modulator) && ~no_blue
     try
         calibration = hadamard_stim.luminos.active_blue_calibration(devices.blue_modulator, options.blue_threshold);
         describe_age(calibration_time(calibration.identity));
+        describe_blue_mode(calibration.identity);
     catch err
         found("blocker", string(err.message), ...
             "Connectivity trials convert each requested blue intensity to an LED voltage through this calibration; without a usable one no blue command is defined.");
@@ -346,6 +374,33 @@ end
 
 report = hadamard_stim.metadata.readiness_report(checks);
 report.devices = devices;
+
+    function describe_blue_mode(identity)
+        % The curve is camera counts in the mode it was measured in, and
+        % blue_threshold is in those counts. The normalised curve holds in
+        % any mode; the threshold was chosen for one.
+        recorded = identity.recorded;
+        if ~isstruct(recorded) || ~isfield(recorded, "camera_bit_depth") || isempty(recorded.camera_bit_depth)
+            found("pass", sprintf("Its counts' camera mode is not recorded; blue_threshold %g is in them.", ...
+                options.blue_threshold));
+            return
+        end
+        measured = sprintf("%d-bit", recorded.camera_pixel_bit_depth);
+        if strlength(recorded.camera_bit_mode) > 0
+            measured = string(recorded.camera_bit_mode);
+        end
+        found("pass", sprintf("Measured in %s counts; blue_threshold %g is in them.", ...
+            measured, options.blue_threshold));
+        if isempty(devices.camera)
+            return
+        end
+        now_ = hadamard_stim.luminos.camera_format(devices.camera);
+        if recorded.camera_bit_depth ~= now_.storage_bits ...
+                || (~isempty(recorded.camera_pixel_bit_depth) && recorded.camera_pixel_bit_depth ~= now_.pixel_bits)
+            found("warning", sprintf("The camera now records %s (%s).", now_.description, now_.mode_label), ...
+                "The blue curve itself still applies (it is normalised), but blue_threshold is in the counts of the mode it was measured in. If it was chosen while looking at this mode, or you recalibrate in this mode, choose it again in this mode's counts.");
+        end
+    end
 
     function describe_age(when)
         % When it was taken, as text only: a usable calibration passes
@@ -479,6 +534,39 @@ try
         v = object.(name);
     end
 catch
+end
+end
+
+function t = mode_text(format)
+t = format.mode_label;
+if strlength(t) == 0
+    t = "not reported";
+end
+if format.pixel_bits ~= format.storage_bits
+    t = t + sprintf(" (%d-bit pixels, saturating at %d)", format.pixel_bits, format.saturation);
+end
+end
+
+function bytes = free_disk(folder)
+% Free space where Luminos writes, or Inf when it cannot be found.
+bytes = Inf;
+while strlength(folder) > 0 && ~isfolder(folder)
+    parent = fileparts(folder);
+    if parent == folder
+        return
+    end
+    folder = parent;
+end
+if strlength(folder) == 0
+    return
+end
+try
+    bytes = double(java.io.File(char(folder)).getUsableSpace());
+catch
+    return
+end
+if bytes <= 0
+    bytes = Inf;
 end
 end
 

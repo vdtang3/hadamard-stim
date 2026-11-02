@@ -26,6 +26,8 @@ classdef TestLuminosPreflight < matlab.unittest.TestCase
             "dmd_inverted",       {{@(app, rig) assign(dmd(app), "invert_output", true), "invert_output"}}, ...
             "conflicting_output", {{@(app, rig) add_ambient(app, "Dev1/ao2"), "already drives Dev1/ao2"}}, ...
             "compressed",         {{@(app, rig) assign(camera(app), "compression_method", "FSE"), "compression"}}, ...
+            "storage_10_bit",     {{@(app, rig) set_mode(camera(app), 10, 10), "raw 8- or 16-bit"}}, ...
+            "unmeasured_8_bit",   {{@(app, rig) kinetix_mode(camera(app), "unmeasured8"), "no measured dark offset (Bit Depth: 8-bit Low Noise (Speed Mode), id p1_s0_g0)"}}, ...
             "blue_uncalibrated",  {{@(app, rig) assign(blue(app), "iscalibrated", []), "no active calibration"}}, ...
             "blue_out_of_range",  {{@(app, rig) assign(blue(app), "max", 4), "modulator range"}}, ...
             "no_dmd_calibration", {{@(app, rig) assign(dmd(app), "CalibratedCamera", "Grasshopper3"), "no calibration for Teledyne Kinetix"}}, ...
@@ -36,7 +38,14 @@ classdef TestLuminosPreflight < matlab.unittest.TestCase
             "unrelated_output",   {{@(app, rig) add_ambient(app, "Dev1/ao5"), "daq_outputs", "schedules Dev1/ao5"}}, ...
             "binned",             {{@(app, rig) assign(camera(app), "bin", 2), "camera_settings", "binned 2"}}, ...
             "calibration_roi",    {{@(app, rig) assign(dmd(app), "ReferenceRoi", [0 0 512 512]), "dmd_calibration", "calibrate at the acquisition ROI"}}, ...
-            "old_calibration_roi", {{@(app, rig) old_mismatched_geometry(app), "dmd_calibration", "calibrate at the acquisition ROI"}})
+            "old_calibration_roi", {{@(app, rig) old_mismatched_geometry(app), "dmd_calibration", "calibrate at the acquisition ROI"}}, ...
+            "blue_other_mode",    {{@(app, rig) blue_in_16_bit_camera_in_8(app), "blue_calibration", "now records raw 8-bit frames (uint8)"}})
+        % The Kinetix modes the package reads: storage bits, pixel bits,
+        % and the words the readiness says, offset included.
+        Mode = struct( ...
+            "speed_8_bit",       {{8, 8, "raw 8-bit frames (uint8): supported. Mode: 8-bit High Full Well (Speed Mode); dark offset 20 counts (Measured"}}, ...
+            "dynamic_16_bit",    {{16, 16, "raw 16-bit frames (uint16): supported. Mode: 16-bit Standard (Dynamic Range Mode); dark offset 100 counts (Yitong's 100"}}, ...
+            "sensitivity_12_bit", {{16, 12, "12-bit pixels, saturating at 4095); dark offset 100 counts (Yitong's 100 (16-bit; mode not in camera_offsets))"}})
         % Otherwise compatible calibrations of any age: shown, never judged.
         AgeDays = struct("one_day", 1, "a_month", 30, "a_year", 365)
     end
@@ -90,6 +99,54 @@ classdef TestLuminosPreflight < matlab.unittest.TestCase
             testCase.verifyNotEmpty(char(item.consequence), "a warning says what it means");
             testCase.verifyEmpty(app.Log);
             testCase.verifyEqual(rig.release().steps, strings(0, 1));
+        end
+
+        function eachRawModePassesAndIsNamed(testCase, Mode)
+            [app, cfg, ~, rig] = fake_firefly(testCase.Folder);
+            set_mode(camera(app), Mode{1}, Mode{2});
+            report = rig.begin(cfg);
+            testCase.verifyTrue(report.can_run, strjoin(report.failures, newline));
+            item = report.checks(string({report.checks.id}) == "camera_settings");
+            testCase.verifyEqual(item.status, "pass");
+            testCase.verifySubstring(item.message, Mode{3});
+            rig.release();
+        end
+
+        function theMoviesOnDiskHalveInEightBit(testCase)
+            [app, cfg, ~, rig] = fake_firefly(testCase.Folder);
+            sizes = zeros(1, 2);
+            depths = [16 8];
+            for k = 1:2
+                set_mode(camera(app), depths(k), depths(k));
+                report = rig.begin(cfg);
+                item = report.checks(string({report.checks.id}) == "imaging_storage");
+                testCase.verifyTrue(ismember(item.status, ["pass" "info"]), item.message);
+                testCase.verifyEqual(item.details.bytes_per_pixel, depths(k) / 8);
+                sizes(k) = item.details.bytes;
+                rig.release();
+            end
+            % His connectivity session at his area: 640 trials of 8000 frames.
+            testCase.verifyEqual(sizes(1), 640 * 8000 * 328 * 448 * 2);
+            testCase.verifyEqual(sizes(2), sizes(1) / 2);
+            cfg.session.mode = "spontaneous";
+            [bytes, largest] = hadamard_stim.luminos.imaging_storage(cfg, [472 1112], ...
+                hadamard_stim.luminos.camera_format(8));
+            testCase.verifyEqual(largest, cfg.spontaneous.block_frames * 472 * 1112);
+            testCase.verifyEqual(bytes, cfg.spontaneous.n_blocks * largest);
+        end
+
+        function aBlueCalibrationSaysItsCameraMode(testCase)
+            [app, cfg, ~, rig] = fake_firefly(testCase.Folder);
+            blue_in_16_bit_camera_in_8(app);
+            set_mode(camera(app), 16, 16);
+            report = rig.begin(cfg);
+            item = report.checks(string({report.checks.id}) == "blue_calibration");
+            testCase.verifyEqual(item.status, "pass");
+            testCase.verifySubstring(item.message, "Measured in 16-bit (Dynamic Range) counts; blue_threshold 15 is in them.");
+            calibration = hadamard_stim.luminos.active_blue_calibration(blue(app), 15);
+            testCase.verifyEqual(calibration.identity.recorded.camera_bit_depth, 16);
+            testCase.verifyEqual(calibration.identity.recorded.camera_bit_mode, "16-bit (Dynamic Range)");
+            rig.release();
         end
 
         function anotherWaveformsTabRateIsOnlyANote(testCase)
@@ -238,6 +295,34 @@ b = blue(app);
 b.calibration_info = struct("method", "Calibrate_Modulator_On_Slide", "units", "counts", ...
     "measured_utc", string(datetime("now", "TimeZone", "UTC") - days(age_days), ...
     "yyyy-MM-dd'T'HH:mm:ss'Z'"), "camera", "Teledyne Kinetix");
+end
+
+function set_mode(c, storage, pixel)
+% The Camera tab's Bit Depth, as Luminos reports it after the change: the
+% Kinetix's own 8- and 16-bit modes, anything else made up.
+if storage == 8 && pixel == 8
+    kinetix_mode(c, "hfw8");
+    return
+elseif storage == 16 && pixel == 16
+    kinetix_mode(c, "standard16");
+    return
+end
+c.bit_depth = storage;
+c.pixel_bit_depth = pixel;
+c.bit_mode_id = sprintf('p1_s0_g%d', pixel);
+c.bit_mode_label = sprintf('%d-bit', pixel);
+end
+
+function blue_in_16_bit_camera_in_8(app)
+% A blue calibration measured in 16-bit, the camera now in 8-bit.
+recorded_blue(app, 0);
+b = blue(app);
+info = b.calibration_info;
+info.camera_bit_depth = 16;
+info.camera_pixel_bit_depth = 16;
+info.camera_bit_mode_label = "16-bit (Dynamic Range)";
+b.calibration_info = info;
+set_mode(camera(app), 8, 8);
 end
 
 function s = snapshot(app)

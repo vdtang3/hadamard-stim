@@ -1,12 +1,20 @@
-function scorr = hadamard_pinhole_calibration(m_q, cal_movies)
+function scorr = hadamard_pinhole_calibration(m_q, cal_movies, offset)
 %HADAMARD_PINHOLE_CALIBRATION Digital pinholes from Hadamard calibration movies.
 %
 %   scorr = hadamard_stim.yitong.hadamard_pinhole_calibration(m_q, cal_movies)
+%   scorr = hadamard_stim.yitong.hadamard_pinhole_calibration(m_q, cal_movies, offset)
 %
 %   m_q is [m q] (63 14); cal_movies is a cell array of calibration movies,
-%   uint16 [rows x cols x frames] as the camera wrote them (what his code
+%   uint16 (or uint8, 8-bit Kinetix) [rows x cols x frames] as the camera wrote them (what his code
 %   read from Sq_camera.bin; see read_vm_movie), each m+1 patterns
-%   repeated. The class matters: his offset subtraction saturates in uint16. Returns double [rows x cols x m+1], each
+%   repeated. offset is the camera's dark offset in the movies' counts
+%   (camera_format f.offset; 100 if not given, his). At offset 100 any
+%   movie but uint8 is his arithmetic exactly: in uint16 the subtraction
+%   saturates at 0 (the sum over recordings is double). 8-bit movies, and
+%   any other offset, are subtracted in double, without clipping: the
+%   8-bit offset is about 20, and in uint8 at 100 most of a movie is 0.
+%   Returns
+%   double [rows x cols x m+1], each
 %   camera pixel's pinhole weights already multiplied by the Hadamard code:
 %   what his code stored as app.function_data.hadamard_cal (.data).
 %
@@ -22,16 +30,28 @@ function scorr = hadamard_pinhole_calibration(m_q, cal_movies)
 %   SHA-256 c8aa7e8684f038a8ad241e9cc5512064a63dedecc2c4893bc20f3472d7d8b530
 %   Changes: takes movies in memory, not folders found with ls(); vm replaced by
 %   arrays; the Windows-only memory() check (refuse to run below 16x the
-%   pinhole array in free RAM) is dropped.
+%   pinhole array in free RAM) is dropped; the offset is an argument, and
+%   uint8 movies or another offset are subtracted in double (8-bit modes).
+if nargin < 3
+    offset = 100;
+end
 n = m_q(1)+1;
 m = m_q(1);
 
-mov_hcal = [];
-for ii = 1:numel(cal_movies)
-    mov = cal_movies{ii};
-    mov_hcal = cat(4,mov_hcal,mov-100);           % uint16: saturates at 0, as his did
+if offset == 100 && ~any(cellfun(@(c) isa(c,'uint8'), cal_movies))
+    mov_hcal = [];
+    for ii = 1:numel(cal_movies)
+        mov = cal_movies{ii};
+        mov_hcal = cat(4,mov_hcal,mov-100);           % uint16: saturates at 0, as his did
+    end
+    mov_hcal = sum(mov_hcal,4);
+else
+    % Same sum, in double: integer counts, so exact in either order.
+    mov_hcal = 0;
+    for ii = 1:numel(cal_movies)
+        mov_hcal = mov_hcal + (double(cal_movies{ii}) - offset);
+    end
 end
-mov_hcal = sum(mov_hcal,4);
 [rows, cols, ~] = size(mov_hcal);
 mov_hcal = single(mean(reshape(mov_hcal,rows,cols,n,[]),4));
 

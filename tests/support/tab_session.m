@@ -2,6 +2,7 @@ function [c, app, cfg, inputs] = tab_session(folder, options)
 %TAB_SESSION A controller as the Luminos tab makes it, on a fake Firefly.
 %
 %   [c, app, cfg, inputs] = tab_session(folder, validated=true)
+%   ... = tab_session(folder, calibration_movies={})   scans read from folders
 %
 %   A HadamardStimController on a LuminosBackend (the Hadamard_Stim
 %   device's construction) over hadamard_stim.testing.make_fake_luminos,
@@ -15,6 +16,7 @@ function [c, app, cfg, inputs] = tab_session(folder, options)
 arguments
     folder (1, 1) string
     options.validated (1, 1) logical = true
+    options.calibration_movies cell = {[]}
 end
 if ~isfolder(folder)
     mkdir(folder);
@@ -28,8 +30,12 @@ check = struct("passed", options.validated, "evidence", "test", ...
 write_text(validation_file, jsonencode(struct("queue_support", check, "slide_queue", check)));
 rng(3, "twister");
 calibration = uint16(100 + randi(500, 16, 600, 64));
+movies = options.calibration_movies;
+if isequal(movies, {[]})
+    movies = {calibration};
+end
 backend = hadamard_stim.luminos.LuminosBackend(app, blue_threshold=15, ...
-    hardware_validation_file=validation_file, calibration_movies={calibration}, ...
+    hardware_validation_file=validation_file, calibration_movies=movies, ...
     acquisition_function=@hadamard_stim.testing.fake_luminos_acquisition);
 c = hadamard_stim.HadamardStimController(backend);
 end

@@ -59,6 +59,9 @@ classdef TestLuminosRunRecords < matlab.unittest.TestCase
             testCase.verifyEqual(recipe.calibrations.blue.blue_threshold, 15);
             testCase.verifyEqual(string(recipe.calibrations.geometry.source), "luminos_dmd_calibration");
             testCase.verifyGreaterThan(recipe.hardware.scan_calibration.n_movies, 0);
+            % His offset, in his mode: recorded with the scans and the camera.
+            testCase.verifyEqual(recipe.hardware.scan_calibration.offset, 100);
+            testCase.verifyEqual(recipe.hardware.imaging_format.offset, 100);
 
             testCase.verifyEqual(string(recipe.standing_deviations), ...
                 hadamard_stim.luminos.firefly_profile().standing_deviations);
@@ -149,6 +152,43 @@ classdef TestLuminosRunRecords < matlab.unittest.TestCase
             trial = jsondecode(fileread(fullfile(testCase.RunFolder, "trials", "trial_0001.json")));
             testCase.verifyEqual(string(trial.status), "completed");
             testCase.verifyFalse(isfield(trial, "start_override"));
+        end
+
+        function anEightBitCameraUsesAndRecordsItsModesOffset(testCase)
+            % 8-bit High Full Well sits at about 20 counts, not his 100:
+            % the calibration subtracts 20 (in double), the record says so,
+            % and the run lists the 8-bit deviation. An 8-bit mode with no
+            % measured offset is refused before anything is computed.
+            kinetix = testCase.App.getDevice("Camera", "name", "Teledyne Kinetix");
+            kinetix_mode(kinetix, "hfw8");
+            rng(3, "twister");
+            calibration = uint8(20 + randi(60, 16, 600, 64));
+            env = hadamard_stim.luminos.make_environment(testCase.App, testCase.Cfg, ...
+                blue_threshold=15, calibration_movies={calibration}, ...
+                hardware_validation=passed_checks(), ...
+                acquisition_function=@hadamard_stim.testing.fake_luminos_acquisition);
+            scans = env.context.hardware.scan_calibration;
+            testCase.verifyEqual(scans.offset, 20);
+            testCase.verifyEqual(scans.format.offset, 20);
+            testCase.verifyEqual(scans.format.mode_label, "8-bit High Full Well (Speed Mode)");
+            testCase.verifyEqual(env.context.hardware.imaging_format.offset, 20);
+            profile = hadamard_stim.luminos.firefly_profile();
+            testCase.verifyEqual(env.context.standing_deviations, ...
+                [profile.standing_deviations; profile.eight_bit_deviation]);
+            testCase.verifyEqual(scans.scorr_sha256, hadamard_stim.metadata.sha256( ...
+                hadamard_stim.yitong.hadamard_pinhole_calibration(testCase.Cfg.scan.m_q, {calibration}, 20)));
+
+            kinetix_mode(kinetix, "unmeasured8");
+            try
+                hadamard_stim.luminos.make_environment(testCase.App, testCase.Cfg, ...
+                    blue_threshold=15, calibration_movies={calibration}, ...
+                    hardware_validation=passed_checks(), ...
+                    acquisition_function=@hadamard_stim.testing.fake_luminos_acquisition);
+                testCase.verifyFail("An 8-bit mode with no measured offset was prepared.");
+            catch err
+                testCase.verifyEqual(err.identifier, 'hadamard_stim:RigNotReady');
+                testCase.verifySubstring(err.message, "no measured dark offset");
+            end
         end
 
         function anUncalibratedBlueRefusesTheEnvironment(testCase)

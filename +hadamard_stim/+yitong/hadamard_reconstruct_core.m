@@ -1,9 +1,9 @@
-function [had_all, ref_all] = hadamard_reconstruct_core(m_q, ref_movies, scorr)
+function [had_all, ref_all] = hadamard_reconstruct_core(m_q, ref_movies, scorr, offset)
 %HADAMARD_RECONSTRUCT_CORE Hadamard and widefield images of movies in memory.
 %
 %   [had_all, ref_all] = hadamard_stim.yitong.hadamard_reconstruct_core(m_q, ref_movies, scorr)
 %
-%   ref_movies is a cell array of scan movies, uint16 [rows x cols x
+%   ref_movies is a cell array of scan movies, uint16 or uint8 [rows x cols x
 %   frames] as the camera wrote them; scorr comes from
 %   hadamard_pinhole_calibration. Returns one Hadamard plane and one
 %   widefield (mean) plane per movie. Unlike dmd_hadamard_reconstruct_core
@@ -16,13 +16,18 @@ function [had_all, ref_all] = hadamard_reconstruct_core(m_q, ref_movies, scorr)
 %   Changes: the reconstruction loop of his file, taking movies instead of
 %   reading folders; vm replaced by arrays (correct_blank_marker, minus,
 %   frame indexing, times, mean, ffzpad written out); the pinhole padding
-%   is computed once per movie instead of once per repeat (same values).
+%   is computed once per movie instead of once per repeat (same values);
+%   8-bit (uint8) movies average the blank marker without saturating; the
+%   camera offset is an argument (100 if not given, his).
+if nargin < 4
+    offset = 100;    % his; camera_format f.offset gives the mode's
+end
 n = m_q(1)+1;
 had_all = [];
 ref_all = [];
 for ii = 1:numel(ref_movies)
     mov_h = correct_blank_marker(ref_movies{ii});
-    mov_h = bsxfun(@minus,double(mov_h),double(100));
+    mov_h = bsxfun(@minus,double(mov_h),double(offset));
     [rows, cols, frames] = size(mov_h);
     ref = mean(mov_h,3);
     had = zeros([rows cols]);
@@ -38,9 +43,15 @@ end
 end
 
 function data = correct_blank_marker(data)
-% vm.correct_blank_marker, in the movie's own class (uint16 here).
+% vm.correct_blank_marker, in the movie's own class (uint16 as his were).
+% 8-bit movies: the sum of two counts above 127 would saturate at 255, so
+% it is taken in uint16 and the mean returned in uint8 (same rounding).
 crow = ceil(size(data,1)/2);
-data(crow,1:4,:) = (data(crow+1,1:4,:) + data(crow-1,1:4,:))/2;
+if isa(data,'uint8')
+    data(crow,1:4,:) = uint8((uint16(data(crow+1,1:4,:)) + uint16(data(crow-1,1:4,:)))/2);
+else
+    data(crow,1:4,:) = (data(crow+1,1:4,:) + data(crow-1,1:4,:))/2;
+end
 end
 
 function m = ffzpad(m,ts)

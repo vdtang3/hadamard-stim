@@ -159,6 +159,41 @@ or when the experimenter has reason to distrust the calibration.
 | **Hadamard calibration scans** (Take new scans, or Find earlier scans → Reuse) | his `had_cal` pinhole scans on a uniform slide, which every reconstruction uses | when drift correction or the z-reference is on; taken at another camera area or binning is a warning | when the camera area, binning or illumination changes |
 | **Blue LED calibration** (Calibrate blue LED; slide in place) | Luminos's slide calibration of the blue LED against the imaging camera | connectivity: yes (blocker without one) | when the LED, light path or camera settings change |
 
+**8-bit or 16-bit Kinetix frames.** Choose the Bit Depth in the Camera tab
+as usual. Readiness names the mode it found ("Kinetix records raw 8-bit
+frames (uint8): supported") and estimates the session's movies on disk at
+that depth (8-bit is half of 16-bit). Counts differ between modes (an 8-bit
+count is not a 16-bit one), so:
+- calibration scans taken in another mode do not count as fitting (a
+  warning; retake them);
+- a blue LED calibration measured in another mode is a warning, because
+  `blue_threshold` is in that calibration's counts;
+- a run cannot be resumed in another mode (its bleaching reference is in
+  the recorded mode's counts);
+- each mode has its own dark offset, which the calibration, its QC and
+  the scan reconstructions subtract: 100 in 16-bit (his), 20 in 8-bit
+  High Full Well (measured). An 8-bit mode with no measured offset is a
+  blocker; add one to `firefly_profile` `camera_offsets` after measuring
+  its dark frames.
+
+See the notebook (2026-11-02) for what has been shown and what still
+needs the rig.
+
+**Hadamard calibration QC.** Prepare rig builds the calibration from the
+named scan folders (newly taken or reused) and saves, in each of them,
+`hadamard_calibration_qc.png` (the panels), `.json` (the numbers and the
+calibration's `scorr_sha256`) and `.mat` (the images). They are made from
+the same movies and calibration the reconstructions use, once per
+calibration; a failure to save them is a warning, not a blocker. Read the
+PNG on the uniform slide as follows:
+1. widefield; 2. the scans reconstructed with this calibration, which should
+follow 1 smoothly; 3. their ratio, smooth when the pinholes are right (a
+grid or speckle is a bad calibration; smooth blobs are out-of-focus
+features, since Hadamard images are sectioned); 4. pinhole contrast, how
+clearly each pixel saw one pinhole (about 3 is noise); 5. the pinhole each
+pixel was assigned, a regular lattice; 7. each recording reconstructed,
+which should agree.
+
 ### What Hadamard Stim controls, and what it inherits
 
 You do not need to build or activate an acquisition in the Waveforms tab
@@ -171,7 +206,7 @@ preparing the FOV.
 |---|---|
 | Kinetix ROI / FOV | Current Luminos Camera state (the Camera tab), shown at the top of the tab |
 | Kinetix binning | Camera tab (1 × 1 expected; other binning is a warning) |
-| Kinetix Bit Depth (readout port/speed) | Camera tab; must be a 16-bit mode (another is a blocker: frames are read as 16-bit) |
+| Kinetix Bit Depth (readout port/speed) | Camera tab; any raw 8- or 16-bit storage mode (a 12-bit mode is stored in 16 bits). Detected from Luminos (`Camera.bit_depth`), read in its own class, its dark offset looked up by mode (8-bit needs a measured one), recorded with every acquisition, calibration scan set and run. Changing it during a session refuses the next acquisition, and a run resumes only in the mode it was recorded in |
 | Kinetix frame trigger | Hadamard Stim: External, one frame per rising edge of `cameraTrigger` (set per acquisition, restored after) |
 | Camera exposure | Hadamard Stim configuration (set per acquisition, restored after) |
 | Number of frames | Hadamard Stim: the number of camera-trigger rising edges in the waveform |
@@ -214,6 +249,18 @@ cannot drive one output.
    **Continue anyway** (with an optional note) starts the run.
 
 **New FOV** starts the next field of view on the same prepared rig.
+
+**Fallback: the orange mask in ordinary Luminos.** After step 3, **Export
+orange DMD mask** (under Cells, below the preview) saves the approved
+cells' orange mask, the exact array the preview and the trials use, as
+`<data folder>/<HHmmss>_<prefix>_orange_mask.mat` (`mask`, logical, DMD
+canvas rows x cols as `DMD.Target`; `info`, provenance: cells, camera area
+and mode, DMD calibration identity, `mask_sha256`) and `.png` (the same
+pixels, white = on). It touches no hardware, so stop the preview if it is
+on and the other tabs are free. To project it: DMD tab, pattern function
+**Hadamard Stim Orange Mask**, paste the `.mat` path as Mask file (or
+`dmd.Target = load(file).mask; dmd.Write_Static();`), then turn the orange
+LED on and acquire as usual.
 
 ### During experiments
 

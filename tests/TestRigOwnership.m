@@ -126,16 +126,39 @@ classdef TestRigOwnership < matlab.unittest.TestCase
                 kinetix.acquisition_exposuretime}, before);
         end
 
-        function anEightBitCameraModeBlocks(testCase)
-            [app, cfg, ~, rig] = fake_firefly(testCase.Folder);
+        function anEightBitCameraModeIsReadAsEightBit(testCase)
+            % The Camera tab's mode is inherited: each movie is recorded
+            % with its format and read back in its own class.
+            [app, cfg] = fake_firefly(testCase.Folder);
             kinetix = app.getDevice("Camera", "name", "Teledyne Kinetix");
-            kinetix.bit_depth = 8;
-            kinetix.bit_mode_label = '8-bit (Speed)';
-            report = rig.begin(cfg);
-            testCase.verifyFalse(report.can_run);
-            item = report.checks(string({report.checks.id}) == "camera_settings");
-            testCase.verifyEqual(item.status, "blocker");
-            testCase.verifySubstring(item.message, "8-bit");
+            set_mode(kinetix, 8);
+            [rig, spec] = scan_rig(app, cfg);
+            acq = rig.acquire(spec);
+            testCase.verifyEqual(acq.imaging.format.storage_bits, 8);
+            testCase.verifyEqual(acq.imaging.format.class, "uint8");
+            testCase.verifyEqual(acq.imaging.format.mode_label, "8-bit High Full Well (Speed Mode)");
+            testCase.verifyEqual(acq.imaging.format.offset, 20);
+            info = dir(acq.imaging.file);
+            testCase.verifyEqual(info.bytes, prod(acq.imaging.frame_size) * acq.imaging.frames);
+            testCase.verifyClass(hadamard_stim.luminos.acquisition_frames(acq, 1:2), "uint8");
+            saved = load(fullfile(acq.luminos_folder, "output_data.mat"), "hadamard_stim_acquisition");
+            testCase.verifyEqual(saved.hadamard_stim_acquisition.imaging.format.storage_bits, 8);
+            rig.release();
+        end
+
+        function aModeChangedDuringASessionIsRefused(testCase)
+            % A run's movies, reference images and bleaching measures are
+            % in one mode's counts.
+            [app, cfg] = fake_firefly(testCase.Folder);
+            kinetix = app.getDevice("Camera", "name", "Teledyne Kinetix");
+            [rig, spec] = scan_rig(app, cfg);
+            acq = rig.acquire(spec);
+            testCase.verifyEqual(acq.imaging.format.storage_bits, 16);
+            set_mode(kinetix, 8);
+            n = numel(app.Acquisitions);
+            testCase.verifyError(@() rig.acquire(spec), "hadamard_stim:CameraFormatChanged");
+            testCase.verifyEqual(numel(app.Acquisitions), n, "nothing was acquired");
+            rig.release();
         end
 
         % ---- Field of view -----------------------------------------------
@@ -229,4 +252,13 @@ warnings = c.getState().readiness.warnings;
 r = hadamard_stim.apply_controller_action(c, "start_run", struct("run_folder", ...
     string(tempname), "acknowledged_warnings", string({warnings.id})), c.Revision);
 assert(r.ok, r.message);
+end
+
+function set_mode(camera, bits)
+% The Camera tab's Bit Depth, as Luminos reports it after the change.
+if bits == 8
+    kinetix_mode(camera, "hfw8");
+else
+    kinetix_mode(camera, "standard16");
+end
 end

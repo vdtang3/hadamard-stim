@@ -17,6 +17,12 @@ function calibration = active_blue_calibration(modulator, blue_threshold)
 %   Yitong's blueCal.mat is used only by the parity tests. Refuses when the
 %   modulator has no usable calibration.
 %
+%   The power is in camera counts in the camera's readout mode when it was
+%   measured (identity.recorded.camera_bit_depth, camera_pixel_bit_depth,
+%   camera_bit_mode; []/"" for calibrations measured before Luminos
+%   recorded them). The normalised curve does not depend on the mode, but
+%   blue_threshold is in its counts: an 8-bit count is not a 16-bit one.
+%
 %   Returns the fields linearize_blue_voltage reads, plus provenance:
 %     v_blue          volts, row
 %     blue_intens_c   power scaled by 15 / blue_threshold, column
@@ -105,7 +111,20 @@ if recorded
     calibration.identity.recorded = struct("method", string(field_or(info, "method")), ...
         "units", string(field_or(info, "units")), ...
         "measured_utc", string(field_or(info, "measured_utc")), ...
-        "camera", string(field_or(info, "camera")));
+        "camera", string(field_or(info, "camera")), ...
+        "camera_bit_depth", number_or_empty(field_or(info, "camera_bit_depth")), ...
+        "camera_pixel_bit_depth", number_or_empty(field_or(info, "camera_pixel_bit_depth")), ...
+        "camera_bit_mode", string(field_or(info, "camera_bit_mode_label")));
+end
+end
+
+function v = number_or_empty(v)
+% A recorded number; [] when the calibration predates recording it ([]
+% survives the recipe's JSON, NaN would not compare equal after it).
+if isnumeric(v) && isscalar(v)
+    v = double(v);
+else
+    v = [];
 end
 end
 

@@ -167,6 +167,47 @@ classdef TestCalibrationScans < matlab.unittest.TestCase
             testCase.verifyTrue(check().overrideable);
         end
 
+        function scansFromAnotherBitDepthAreAWarning(testCase)
+            % The scans' camera mode is recorded with them. Scans from
+            % another bit depth are not taken as fitting: the pinholes are
+            % in principle scale-invariant, but that is untested on the rig.
+            [~, app] = tab_session(testCase.Folder);
+            backend = hadamard_stim.luminos.LuminosBackend(app, blue_threshold=15, ...
+                hardware_validation_file=fullfile(testCase.Folder, "firefly_checks.json"), ...
+                acquisition_function=@hadamard_stim.testing.fake_luminos_acquisition);
+            c = hadamard_stim.HadamardStimController(backend);
+            cfg = c.Config;
+            cfg.naming.prefix = "M1";
+            c.setConfig(cfg);
+            c.acquireCalibrationScans();
+            file = fullfile(backend.settings().calibration_folders(1), "hadamard_calibration_scan.json");
+            record = jsondecode(fileread(file));
+            testCase.verifyEqual(record.camera.format.storage_bits, 16);
+            testCase.verifyEqual(record.camera.format.class, 'uint16');
+            check = @() c.Preflight.checks(string({c.Preflight.checks.id}) == "scan_calibration");
+            c.runPreflight();
+            testCase.verifyEqual(check().status, "pass");
+            testCase.verifySubstring(check().message, "bit depth (raw 16-bit frames (uint16))");
+            camera = app.getDevice("Camera", "name", "Teledyne Kinetix");
+            kinetix_mode(camera, "hfw8");
+            c.runPreflight();
+            testCase.verifyEqual(check().status, "warning");
+            testCase.verifySubstring(check().message, ...
+                "Taken in raw 16-bit frames (uint16) (16-bit); the camera now records raw 8-bit frames (uint8) (8-bit High Full Well (Speed Mode)).");
+            testCase.verifyTrue(c.Preflight.can_run);
+            sets = backend.calibration_scan_sets();
+            testCase.verifyFalse(sets(1).compatible);
+            % A set recorded before 8-bit support was 16-bit.
+            record.camera = rmfield(record.camera, "format");
+            hadamard_stim.metadata.write_text(string(jsonencode(record)), file);
+            c.runPreflight();
+            testCase.verifySubstring(check().message, "Taken in raw 16-bit frames (uint16) (mode not recorded)");
+            camera.bit_depth = 16;
+            camera.pixel_bit_depth = 16;
+            c.runPreflight();
+            testCase.verifyEqual(check().status, "pass");
+        end
+
         function theBlueLedIsCalibratedOnTheSlideByLuminos(testCase)
             % An uncalibrated LED: preflight and Prepare say so. The tab's
             % Calibrate blue LED runs Luminos's slide routine on the LED

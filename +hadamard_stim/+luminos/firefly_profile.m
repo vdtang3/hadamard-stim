@@ -51,6 +51,22 @@ profile.daq_rate = 1e5;            % his DAQ ran on its own clock at 100 kHz
 % the DAQ's own, whatever the Waveforms tab or the rig file chose.
 profile.daq_clock_source = "Internal Dev1";
 
+% The Kinetix's dark offset in each readout mode, in that mode's counts:
+% what the calibration, its QC and the scan reconstructions subtract
+% (camera_format f.offset). Keyed by the mode as Luminos reports it
+% (Camera.bit_mode_id and bit_mode_label, both must match), not by bit
+% depth: another mode at the same depth may sit elsewhere. A 16-bit mode
+% not listed takes his 100 (every recording he reconstructed was 16-bit);
+% an 8-bit mode not listed has no offset, and preflight refuses it.
+offset = @(id, label, bits, counts, source) struct("mode_id", id, "mode_label", label, ...
+    "storage_bits", bits, "offset", counts, "source", source);
+profile.camera_offsets = [
+    offset("p2_s0_g1", "16-bit Standard (Dynamic Range Mode)", 16, 100, ...
+        "Yitong's 100, subtracted by every reconstruction of his (16-bit parity)")
+    offset("p1_s0_g1", "8-bit High Full Well (Speed Mode)", 8, 20, ...
+        "Measured: Firefly Kinetix dark frames, median 20 (18-24), Yi-Chieh Huang's 20260619_8bit_test (notebook 2026-11-02)")
+    ];
+
 % Luminos's DMD code: the ALP class and its MEX. A slide queue check stays
 % evidence across Luminos commits that leave these unchanged
 % (dmd_code_changed, hardware_gate).
@@ -86,4 +102,8 @@ profile.standing_deviations = [
     "Stage moves go through the Newport controller, including its backlash correction on downward moves."
     "Luminos records every camera on the rig; cameras the protocol does not use take one free-running frame."
     ];
+% Recorded only when the imaging camera is in that kind of mode
+% (make_environment adds it to context.standing_deviations).
+profile.eight_bit_deviation = ...
+    "8-bit camera mode: the calibration, its QC and the scan reconstructions subtract the mode's measured dark offset (camera_offsets) in double, without clipping at 0; his code subtracted 100 in the movie's integer class (uint16), which clips. 16-bit modes are unchanged.";
 end

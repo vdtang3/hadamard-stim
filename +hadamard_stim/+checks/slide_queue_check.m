@@ -85,7 +85,7 @@ spec = hadamard_stim.protocol.acquisition_spec("queue_check", "firefly_slide_que
     waveform, camera_exposure_ms=c.camera_exposure_ms);
 acq = rig.acquire(spec);
 if isempty(options.frame_means)
-    mov = hadamard_stim.luminos.read_frames(acq.imaging.file, acq.imaging.frame_size);
+    mov = hadamard_stim.luminos.acquisition_frames(acq);
     means = squeeze(mean(double(mov), [1 2]));
 else
     means = options.frame_means(acq);

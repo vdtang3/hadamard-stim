@@ -791,7 +791,8 @@ readout, clear or scan mode, so the package's three settings
 `acquisition_exposuretime`) are the whole of the timing it can own; they
 are journaled and restored, also after a failure. Inherited from the
 Camera tab: ROI, binning and Bit Depth (PVCAM port/speed). An 8-bit
-storage mode is now a blocker (`read_frames` reads uint16). Not checked:
+storage mode is now a blocker (`read_frames` reads uint16). (Since
+2026-11-02, 8-bit is supported; see that entry.) Not checked:
 exposure plus the camera's frame overhead against the trigger period
 (`Camera.frameOverhead` is only valid after setup); his 0.02 ms margin is
 kept.
@@ -877,16 +878,387 @@ Still to see on the rig: Run on slide end to end at 328 rows on R2021b
 (movie read, classification, record written), and progress arriving in
 the tab during a run.
 
+## 2026-10-30: the driver probe on Firefly
+
+With Luminos closed, `hadamard_stim.checks.driver_check()` passed:
+`alp4395.dll 1.0.19.8 (4.3); serial 13119, DLP7000 1024x768, recognised true`.
+So Firefly's DMD is a DLP7000 (XGA, 1024 x 768, as his packed masks assumed)
+on ALP API 4.3, through `alp4395.dll` 1.0.19.8, Luminos's first-choice
+driver. Together with the live queue check and Run on slide passing the same
+day, this closes the open question of which DLL opens the board and whether
+it accepts `ALP_PROJ_QUEUE_MODE`.
+
+It also settles the earlier puzzle (2026-10-28): the lab-server ALPTool's
+DLL is this same 1.0.19.8 and has no queue constants, yet his wrapper used
+`api.PROJ_QUEUE_MODE`. The constant is part of the 4.3 API, which this DLL
+implements; what the old ALPTool lacked was the MATLAB-side definition, so
+his "locally updated ALPTool" was most likely an updated wrapper over the
+same DLL. That is an inference: his local copy was never seen. Nothing in
+the code depends on it: Luminos's MEX takes the constant from its own
+`alp.h` (`ALP_PROJ_QUEUE_MODE 2314`).
+
+## 2026-10-30: segmentation on Firefly, and P4
+
+Run on slide, DMD geometry, Prepare rig (after recalibrating) and the
+reference image now work on Firefly. **Segment** then failed with "Unable to
+perform assignment because the left and right sides have a different number
+of elements".
+
+**What the data shows** (`20261030/162655__had_ref`, reconstructed offline
+with the `1625xx_had_cal_1x_arch_*` scans and the rig's own reader and
+cores): a 472 x 1112 image (the Camera tab's area was 1112 x 472 at x 1104,
+y 1384, not his 328 x 448) of a uniform slide, a bright illumination field
+with dust and a scratch, and no cells. It was not a zero-cell failure:
+41,034 watershed regions, 596 candidates for 320 cells.
+
+**The failure is P4.** `static_image_seg_v5` line 83 (his line 85),
+`[ctr_r(j),ctr_c(j)] = ind2sub(size(imRef),find(ismember(imRef(:),ctr_val(j))))`:
+the left side is one element, and the right two for j = 366 (value
+320.85888671875023 at rows/columns (134, 625) and (327, 652), the second in
+an unkept region) and j = 539. The reconstruction is quantised (median step
+between distinct values 2.9e-4; 2.6 % of pixels share a value), and the
+area has 3.6x his pixels, so a coincidence somewhere in the image is likely.
+Not orientation, the ROI's shape or R2021b: the same image fails the same
+way here on R2026a.
+
+**Changed (Vincent asked for the fix).** The maximum is found among the
+region's own pixels (the first, column-major, if the region holds it
+twice). Where his code ran, the value occurred exactly once, inside the
+region, so every result he could get is unchanged: his image, the synthetic
+image, the fixtures and the 640-trial run all still match. Too few watershed
+regions (1000) or candidates (threshold plus n_exclude, and threshold + 99
+for min_val) now raise `hadamard_stim:TooFewRegions` / `TooFewCandidates`,
+"No cells detected: ...", instead of an indexing error. The algorithm never
+returns zero cells: it returns exactly `segmentation.threshold` or refuses.
+On today's slide it returns 320 "cells" that are noise and dust, as his would
+have; approving them is the operator's call.
+
+**Tests.** `TestParityGeometry`: a kept cell's maximum copied to a far,
+non-peak pixel leaves the cells unchanged; the integer image his code failed
+on now segments; a blank image and too few candidates say no cells were
+detected. `TestController`: Segment on a blank image reports
+`TooFewRegions` and leaves the session in CONFIGURING.
+
+## 2026-10-30: a QC of the Hadamard calibration
+
+Asked for (Vincent): something to look at that says whether a calibration
+can be trusted, from the data the pipeline uses.
+
+**Where.** The calibration (`scorr`) is built in only one place,
+`make_environment` at Prepare rig, from `calibration_folders`. Newly taken
+and reused scan sets both arrive there (taking or reusing drops the
+prepared rig). Right after `scan_reconstruction`, when the movies came from
+folders, `luminos.calibration_qc(m_q, movies, scorr)` computes the QC and
+`luminos.write_calibration_qc` saves `hadamard_calibration_qc.png/.json/.mat`
+in every folder of the set, skipped when the JSON already names that
+`scorr_sha256`. The record of the environment
+(`context.hardware.scan_calibration.qc`) lists the PNGs written, or the
+error. A failure only warns: the QC is for the operator and must not stop a
+rig that can run. Movies passed in memory (tests) write nothing.
+
+**What it shows.** Nothing is reconstructed differently for display:
+- widefield, the movies' mean above the offset;
+- the calibration movies reconstructed with `scorr` by
+  `dmd_hadamard_reconstruct_core` (the reference image's and drift scans'
+  path), per recording and averaged, and their ratio to widefield where lit;
+- pinhole contrast, the calibration's own first stage (recordings summed,
+  repeats averaged, correlated with the 63 codes), max over median per
+  pixel;
+- the pinhole `scorr` assigns each pixel, exact from `scorr` through the
+  codes' pseudo-inverse, zoomed so the lattice is visible.
+A first measure, the assigned pinhole's share of `scorr`'s weights, was
+dropped: bilinear down-sampling mixes pinholes alike for good and bad
+calibrations (0.39 vs 0.35 on synthetic ones), so it said nothing.
+
+**On synthetic recordings** (`TestCalibrationQc`): a seen pattern gives
+contrast 312 lit / 88 dark, ratio CV 0.002, recordings r = 1.000; no
+pattern gives 3.8 / 3.8, CV 0.29, r = -0.21.
+
+**On today's Firefly set** (`1625xx_had_cal_1x_arch_1..3`, rendered offline
+into the scratchpad, not the lab share): the lattice is clean and regular,
+all 63 pinholes used, the recordings agree (r = 0.978), nothing saturated
+(peak 28,600). But pinhole contrast is only 4.3 where lit against 3.5 in
+the dark, and the ratio varies (CV 0.19) in smooth blobs that match the
+slide's dark spots, so they are probably the slide rather than the
+calibration. Low contrast says most of each pixel's light is not from its
+pinhole (a thick or defocused slide, or out-of-focus background). Whether
+4.3 is normal for this method is unknown: we have none of his real
+calibration movies to compare with. Worth comparing a thinner slide or a
+refocused one.
+
+## 2026-11-02: 8-bit or 16-bit Kinetix frames
+
+Asked for (Vincent): run Firefly in 8-bit as well as 16-bit, for a larger
+area at the same disk and bandwidth. The mode is inherited from the Camera
+tab, like the area, rather than being a package setting.
+
+**What sets the bytes.** Luminos's `Camera.bit_depth` is the storage depth
+(8 or 16), read back from the camera after every mode change
+(`sync_bit_depth_from_camera`, `Get_Storage_Bit_Depth`). It is what
+`Extract_Mov` sizes a recording by. `pixel_bit_depth` is what the sensor
+delivers: a 12-bit mode is stored in 16 bits and saturates at 4095.
+`bit_mode_id` / `bit_mode_label` name the mode and are only shown, never
+parsed. `+luminos/camera_format` turns these into one descriptor: storage
+bits, bytes/pixel, class (`uint8`/`uint16`), pixel bits, saturation, mode,
+compression and whether it is supported (raw 8 or 16).
+
+**The 16-bit assumptions, and what replaced them.**
+- `read_frames`: 2 bytes/pixel, `*uint16`. It now takes `format=` and reads
+  in the format's class, never widened. Frame count and offsets come from
+  `bytes_per_pixel`.
+- Its three callers (`LuminosRig.movie_mean`, used for bleaching;
+  `scan_reconstruction`, used for the reference image, z-stack and drift
+  scans; `slide_queue_check`) now read through `acquisition_frames(acq)`.
+  It uses `acq.imaging.format`, which `LuminosRig.acquire` records with
+  every movie. An acquisition without one is 16-bit, because preflight
+  refused every other depth until now.
+- Preflight `camera_settings`: 16-bit only. It now accepts raw 8/16 and
+  says which ("records raw 8-bit frames (uint8): supported. Mode: …").
+  Compressed or other depths stay blockers.
+- `calibration_qc`: saturation was `intmax("uint16")`. It is now the
+  format's (2^pixel_bits − 1).
+- The two reconstruction cores' `correct_blank_marker` averages two counts
+  in the movie's class. In uint8, two counts above 127 saturate. It now
+  sums in uint16 for uint8 movies (same rounding); uint16 is unchanged.
+  This is the only change to the parity ports.
+- `fake_luminos_acquisition` sized files at 2 bytes/pixel and now uses the
+  fake camera's depth.
+- Docs and argument comments that said uint16.
+- Already format-aware, untouched: `Extract_Mov` (calibration folders)
+  returns the recording's own class. `hadamard_pinhole_calibration`'s
+  `mov-100` saturates at 0 in uint8 exactly as in uint16, and its sum over
+  recordings is double. *(Wrong for the real camera: the 8-bit offset is
+  about 20, so this clip erases 8-bit movies. See "The 8-bit offset is 20"
+  below.)*
+- Not camera data: `read_vm_movie` (his `Sq_camera.bin`, parity tests
+  only) and `alp_logical_to_btd`'s `bit_depth` (DMD bit planes).
+
+**Scale.** Every algorithm downstream of reading converts to double and
+none uses the 0–65535 range:
+- Reconstruction subtracts 100 in double. Each code column sums to zero
+  (32 ±1 each), so an offset cancels exactly.
+- The calibration normalises each pixel's correlation by its blurred
+  maximum before the argmax, so it is gain-invariant.
+- Segmentation ranks regions by contrast, so it is scale-invariant.
+- Drift: optical flow works on `mat2gray` images, and the z-correlation is
+  z-scored.
+- Bleaching is the ratio b0/b1, invariant within one mode.
+
+The constants that are in counts are the offset of 100 (both cores, the
+calibration and the QC) and `blue_threshold`.
+
+Tested on a synthetic slide (`TestCameraFormat`). *(This test kept the
+8-bit offset at 100, which the real Kinetix does not; superseded below.)*
+The same counts as uint8
+and uint16 give identical calibrations and reconstructions. The same slide
+at 1/16 the counts in 8 bits gives a calibration whose reconstruction of a
+16-bit scan has r 0.9999 and 0.3 % rms difference from the 16-bit one's.
+Two 16-bit calibrations from different noise differ by 0.4 %. The
+calibration's pinhole contrast drops from 312 to 172 (quantisation). Which
+pinhole is largest at a pixel agrees for only 18 % of lit pixels even
+between two 16-bit calibrations (weights spread after the bilinear
+resampling), so that is not a usable comparison.
+
+**Rules chosen.**
+- *Within a session or run, one mode.* `LuminosRig` keeps the format it
+  saw at `begin`. An acquisition after a change raises
+  `hadamard_stim:CameraFormatChanged` before anything is driven. Resuming
+  a run whose recipe records another mode is a blocker
+  (`camera_format_changed`): the checkpoint's b0 is in the recorded
+  mode's counts, so b0/b1 would scale orange by the gain ratio. Runs
+  recorded before today count as 16-bit, with the mode not compared.
+- *Hadamard calibration scans.* The math above says they are in principle
+  mode-independent, apart from the offset clip and quantisation, but that
+  is shown only on a synthetic slide. So a set from another depth is not
+  "compatible" (it is not offered as fitting, and readiness warns, as for
+  another area) until the rig comparison shows it. The scan record
+  (`hadamard_calibration_scan.json`) records `camera.format`; sets from
+  before are 16-bit. The calibration's identity in the recipe
+  (`hardware.scan_calibration.format`) and its QC JSON record it.
+  Calibration scans of mixed depths are refused
+  (`MixedCalibrationFormats`).
+- *Blue LED.* The curve is camera counts above the LED-off level, measured
+  in whatever mode the camera was in. `linearize_blue_voltage` normalises
+  by the maximum, so the curve itself does not depend on the mode a run
+  images in. `blue_threshold` is in the calibration's counts, though, and
+  the same light gives different counts in different modes (the ratio of
+  the modes' gains, to be measured). Luminos's `Measure_Modulator_On_Slide` did not record the
+  mode, so Hadamard Stim could not tell. It now records
+  `camera_bit_depth`, `camera_pixel_bit_depth`, `camera_bit_mode_id` and
+  `_label` (Luminos change). `active_blue_calibration` carries them in the
+  identity, and readiness says the mode ("Measured in 16-bit (Dynamic
+  Range) counts; blue_threshold 15 is in them"). It warns when the camera
+  is now in another mode, because a threshold chosen while looking at
+  this mode would be on the wrong scale. Older calibrations say the mode
+  is not recorded. Recalibrating in 8-bit also risks saturating the
+  frame mean near the top of the sweep (255).
+
+**Metadata.**
+- Run recipe: `hardware.imaging_format` and `hardware.cameras(k).format`.
+- Each acquisition: `imaging.format`, in `output_data.mat`
+  `hadamard_stim_acquisition`.
+- Scan set: `camera.format`.
+- QC JSON: `camera_format`, plus `storage_class`, `saturation_count` and
+  `dark_median_raw` in the summary.
+- Blue identity: `recorded.camera_bit_*`.
+
+**Memory and disk.** No existing estimate counted camera bytes.
+`block_memory` is the DAQ's rows only: Luminos streams frames to disk
+(`FrameStreamRecorder`). New readiness item `imaging_storage` (connectivity
+and spontaneous) estimates the session's trial or block movies at the
+current area and bytes/pixel, against free space on the data folder's
+disk. It is informational (`info` when short), not gating. At his area,
+connectivity is 640 × 8000 frames ≈ 1.5 TB at 16-bit and 0.75 TB at 8-bit.
+At 472 × 1112, one spontaneous block of 288,000 frames is 302 GB at 16-bit
+and 151 GB at 8-bit. A message-building bug was fixed in passing: the
+block-memory line appended free GB to a char with `+`.
+
+**Needs the rig.**
+- The Kinetix offset in each 8-bit mode. Everything subtracts 100.
+  `dark_median_raw` in the QC shows it (needs a dark area or a dark
+  frame). If it is below 100, `mov-100` clips signal at 0 in the
+  calibration. *(Answered from Yi-Chieh's data: 20. See below.)*
+- Whether Luminos's `Get_Storage_Bit_Depth` really reports 8 for the
+  Kinetix 8-bit modes, so files are 1 byte/pixel. Compare a recording's
+  size with frames × area.
+- Calibration scans in 8 vs 16 bit on the same slide: QC, reconstruction
+  agreement. Then decide whether to relax the compatibility rule.
+- Saturation, background noise and dF/F precision at 8-bit. If the 8-bit
+  offset is also 100, only ~155 counts lie above it.
+- `blue_threshold` in 8-bit counts, if the LED is recalibrated in 8-bit.
+- Luminos UI: whether the Bit Depth control can be changed while the tab
+  holds the rig. The rig refuses the next acquisition if it is.
+
+## 2026-11-02: the 8-bit offset is 20, not 100
+
+**What the data show.** A read-only audit of Yi-Chieh Huang's Firefly
+Kinetix recordings (`/mnt/cohen-lab/Lab/Labmembers/YiChieh Huang/Firefly/Data/`,
+`20260618_8bit_test`, `20260619_8bit_test`, `20261013_LED_test`,
+`20261021_Cux2_LOP_CS_009_1st`; nothing written there):
+- 8-bit recordings are exactly 1 byte/pixel (all 36 raw ones), so
+  `Get_Storage_Bit_Depth` reports 8 as assumed.
+- The modes, as Luminos records them: `p1_s0_g1` "8-bit High Full Well
+  (Speed Mode)" and `p2_s0_g1` "16-bit Standard (Dynamic Range Mode)".
+- 8-bit dark level: median 20 (18–24) with all light off
+  (`20260619_8bit_test/213710…`), and 20–22 outside the cranial window in
+  vivo. Read noise 0.2–0.6 counts; lit pixels 1.3–2.7 counts, so shot
+  noise, not quantisation, dominates.
+- A slide pair 3 min apart (8 vs 16 bit, same light): 1 8-bit count ≈ 82
+  16-bit counts (signal and noise ratios agree); relative noise the same.
+- Nothing saturates: 8-bit maximum 225 on the slide, 200 in vivo.
+- His `mov-100` in uint8 zeroes 92 % of the slide's 8-bit samples, 100 %
+  at 0.5X, and 44 % in vivo. At slide levels the calibration then fails
+  ("Incorrect dimensions for matrix multiplication"); at in-vivo levels it
+  runs but its reconstructions are 35 % rms off.
+- The 16-bit offset was not measured directly (no 16-bit dark frames);
+  our 20261030 calibration scan bottoms out at 124–130, consistent with
+  about 100.
+
+**What changed.**
+- `firefly_profile.camera_offsets`: the offset per mode, keyed by
+  `bit_mode_id` and `bit_mode_label` (both must match), with its source.
+  16-bit Standard → 100 (his); 8-bit High Full Well → 20 (measured). A
+  16-bit mode not listed, or 16 bits with no mode (old records), takes
+  100. An 8-bit mode not listed has none.
+- `camera_format` carries `offset`, `offset_source` and `offset_known`. A
+  recorded format keeps the offset it recorded; one recorded before
+  offsets were is looked up by its mode.
+- `hadamard_pinhole_calibration(m_q, movies, offset)`: at 100, any movie
+  but uint8 is his arithmetic exactly (uint16 subtraction, clipping at 0).
+  uint8 movies, or any other offset, are subtracted in double, without
+  clipping. The two reconstruction cores take the offset too (they
+  already subtracted in double; it cancels in the Hadamard image but not
+  in `hadamard_reconstruct_core`'s widefield `ref`). Called without it,
+  every port gives his values, and the golden tests are unchanged.
+- `scan_reconstruction(..., offset=)` passes the calibration scans'
+  offset to the calibration and both cores; `NaN` (unknown) is refused
+  (`UnknownCameraOffset`). `make_environment` takes it from the scans'
+  format (`scans_format`), which comes from the scan record, else the
+  camera now.
+- `calibration_qc(..., offset=)`: widefield, ratio, dark level and the
+  contrast stage use it, the contrast stage with the calibration's own
+  subtraction rule. The summary records `offset`; the QC panel shows it.
+- Preflight `camera_settings`: the pass message names the offset and its
+  source; a raw mode with no known offset is a blocker. Calibration scan
+  sets taken at another offset do not fit (`scanSetFits`).
+- Metadata: the offset is in every recorded format (`imaging.format`,
+  `hardware.imaging_format`, `cameras(k).format`, the scan record's
+  `camera.format`, the QC JSON's `camera_format`), plus
+  `hardware.scan_calibration.offset` (what the calibration subtracted).
+- Parity: when the imaging camera or the calibration scans are not his
+  case (16-bit at 100), the run's `standing_deviations` add
+  `profile.eight_bit_deviation`. 16-bit runs record exactly the list they
+  did before.
+- Still incompatible: 8- and 16-bit calibration sets (offset 20 vs 100,
+  gain about 82×).
+
+**Tests.** `TestCameraFormat`'s 8-bit slide is now the Kinetix's: offset
+20 and 1/25 the counts above it, so every 8-bit count is ≤ 100. Calibrated
+at 20 in double, its reconstruction of a 16-bit scan differs from the
+16-bit calibration's by r 0.99988 and 0.31 % rms (two 16-bit calibrations
+from different noise: 0.36 %). Pinhole contrast 120 against 312, as
+quantisation would predict, and the lit area 0.290 against 0.287. The same
+movies through his uint8 `-100` are 100 % zero and the calibration fails.
+New: `sixteenBitMoviesAreHisArithmetic` (offset 100 given or not, clipping
+kept), `anEightBitCameraUsesAndRecordsItsModesOffset` (environment, record,
+deviation, refusal), preflight blocker `unmeasured_8_bit`. Fake cameras use
+the real mode ids and labels (`tests/support/kinetix_mode`).
+
+**Still needs Firefly.**
+- A real 8-bit Hadamard calibration on a slide, against a 16-bit one,
+  with the QC: then decide whether 8/16 calibration sets can be
+  compatible.
+- Dark frames in 16-bit Standard, to confirm 100, and in any other mode
+  someone wants to use (add it to `camera_offsets`).
+- Whether the 8-bit offset drifts (temperature, days); `dark_median_raw`
+  in each QC shows it when the slide leaves a dark area.
+- `blue_threshold` if the LED is calibrated in 8-bit: about 80× fewer
+  counts for the same light.
+
+## 2026-11-02: exporting the orange mask for ordinary Luminos acquisitions
+
+Asked for (Vincent): a fallback while the run pipeline is not usable. After
+reference image, segmentation and approval, take the approved cells'
+orange illumination and use it from Luminos's own tabs.
+
+- `HadamardStimController.exportOrangeMask(file_stem)`, action
+  `export_orange_mask` (payload `file_stem` optional with a backend: then
+  `<data folder>/<HHmmss>_<prefix>_orange_mask`). Legal with approved cells
+  (CELLS_APPROVED or READY) and nothing in progress; a preview may be on.
+- It writes `Cells.illum_mask` itself, the array `startOrangePreview`
+  passes to `dmd_show_mask` (Target, Write_Static) and the trials put first
+  in every queue. Nothing is regenerated or resampled.
+  `metadata.write_orange_mask` saves `mask` and `info` to .mat (-v7) and the
+  mask as a 1-bit PNG, one pixel per mirror, same orientation.
+  `info.mask_sha256` is the hash the preview and `run_recipe.json`
+  (`cells.illum_mask_sha256`) record.
+- Provenance (`info`): cells (id, x/y, camera-space spots, excluded,
+  threshold, n_exclude, spot size), the reference image and its source,
+  the DMD calibration identity (`geometry.identity`), the imaging format at
+  Prepare, the camera as the Camera tab has it now (area, bin, mode; read
+  only), orange_start_v, canvas size, time.
+- No hardware: the rig is not begun, no device method is called beyond
+  reading the Camera tab's area. Tested by comparing every device's
+  properties before and after, and the device log.
+- Luminos: `Preset_pattern/pdHadamard_Stim_Orange_Mask.m`, a DMD-space
+  (`pd`) pattern function. The DMD tab lists it as "Hadamard Stim Orange
+  Mask", with a Mask file text field. It loads `mask`, refuses another
+  canvas size or a file that is not an export, and returns the array; a
+  `pd` function goes out through Target and Write_Static, as the preview
+  did. Tested: it returns exactly what the preview showed.
+- Still for the operator: the orange LED is set in the ordinary tabs (the
+  export does not turn it on), and the export is of the cells as approved,
+  not as redrawn after drift correction during a run.
+
 ## Parity issues (behaviour that may be a bug; reproduced, not fixed)
 
 - **P1. Reference-image orientation changed after the experiments.** `hadamard_ref.m` gained a transpose on 2026-02-10, after his 2025 data, alongside a Kinetix MEX change. In the newest snapshot, segmentation would run on the transposed image while drift correction compares untransposed scans with the untransposed `hadamard_ref`. The fixtures follow his 2025-03-08 session, which is the untransposed behaviour he actually ran. In Luminos the reference image, scans and DMD calibration must all share Luminos's camera orientation. **Confirmed 2026-10-13: the port follows the untransposed 2025 behaviour.** The transposed `hadamard_ref.m` stays frozen only as evidence.
 - **P2. `linearize_blue_voltage` threshold.** It drops calibration points with intensity ≤ 15 in his raw camera units. That number has no meaning for a Luminos calibration. Since Phase 4 the operator must set `blue_threshold` in the calibration's own units. It is applied exactly (power·15/blue_threshold into the unmodified port) and recorded as a deviation; no translation is invented.
 - **P3. Masks redrawn after drift correction skip the `saved_mask` AND** that the initial Auto Square masks receive. Reproduced.
-- **P4. Segmentation fails on tied maxima.** It errors if two region maxima tie in value (likely on integer images), and also with fewer than 1000 watershed regions. Reproduced, with the error recorded.
+- **P4. Segmentation fails on tied maxima.** His code looked up each kept region's maximum value in the whole image, so it errored whenever that value also occurred at any other pixel (not only another region's maximum), and with fewer than 1000 watershed regions. Reproduced, with the error recorded. **Changed 2026-10-30** after it stopped segmentation on Firefly: the maximum is looked up within the region, which changes nothing his code could return; too few regions or candidates refuse with "No cells detected" errors.
 - **P5. Bleaching state.** `b0` is measured only at trial 1. The orange voltage is rescaled only at retarget trials, from the last trial's `b1`.
 
 ## Open questions
 
-- Which ALP DLL opens Firefly's DMD and whether it accepts `ALP_PROJ_QUEUE_MODE` (driver probe, README). The board's power-on edge no longer matters: queues are loaded on the rising edge (2026-10-28), which the slide test verifies.
 - His starting orange voltage for stimulation trials was not saved. The fixtures use a 1.0 V placeholder; it only scales the orange row.
 - Whether `saved_mask` was set during his 2025 sessions is unknown. The drift fixture covers both cases.

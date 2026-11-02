@@ -192,7 +192,8 @@ classdef LuminosBackend < handle
                 cam = struct("name", string(c.name), "roi", roi, "width", roi(2), ...
                     "height", roi(4), "bin", bin, "frame_size", floor([roi(4) roi(2)] ./ bin), ...
                     "bit_depth", double(read(c, "bit_depth", 16)), ...
-                    "bit_mode", string(read(c, "bit_mode_label", "")));
+                    "bit_mode", string(read(c, "bit_mode_label", "")), ...
+                    "format", hadamard_stim.luminos.camera_format(c));
             catch
                 cam = [];
             end
@@ -316,7 +317,8 @@ classdef LuminosBackend < handle
                 "taken_utc", string(datetime("now", "TimeZone", "UTC", "Format", "yyyy-MM-dd'T'HH:mm:ss'Z'")), ...
                 "settings", cfg.calibration_scan, "m_q", cfg.scan.m_q, ...
                 "camera", struct("name", string(devices.camera.name), ...
-                    "roi", devices.camera.getROIForAcquisition(), "bin", double(devices.camera.bin)), ...
+                    "roi", devices.camera.getROIForAcquisition(), "bin", double(devices.camera.bin), ...
+                    "format", hadamard_stim.luminos.camera_format(devices.camera)), ...
                 "dmd", string(devices.dmd.name), ...
                 "folders", reshape([acquisitions.luminos_folder], 1, []), ...
                 "waveform_sha256", acquisitions(1).waveform_sha256);
@@ -445,21 +447,30 @@ classdef LuminosBackend < handle
             if ~compatible
                 item = make("warning", message=age.text + ". " + message, details=details, consequence= ...
                     "Reconstruction centre-crops or pads the calibration to each scan, so it still runs, " + ...
-                    "but the reference image, z-stack and drift correction may be spatially wrong. Retake them at this area.");
+                    "but the reference image, z-stack and drift correction may be spatially wrong (another " + ...
+                    "area) or are untested (another bit depth). Retake them as the camera is now.");
             else
                 % Age is text only: compatible scans pass whatever their age.
                 reused = "";
                 if ~age.today && ~isempty(age.age_days)
                     reused = " — reused";
                 end
-                item = make("pass", message=age.text + reused + ". At this camera area and binning.", details=details);
+                item = make("pass", message=age.text + reused + ". At this camera area, binning and bit depth (" + ...
+                    scan_set_format(record).description + ").", details=details);
             end
         end
 
         function [compatible, message] = scanSetFits(obj, record)
             % Whether scans recorded by record were taken at the camera's
-            % area and binning now (reconstruction centre-crops the
-            % calibration to each scan, so another area reconstructs wrongly).
+            % area, binning and bit depth now (reconstruction centre-crops
+            % the calibration to each scan, so another area reconstructs
+            % wrongly). The pinholes are found by a normalised correlation
+            % with codes whose columns sum to zero, so in principle neither
+            % gain nor offset matters; but his uint16 offset subtraction
+            % clips at zero, each mode has its own offset (camera_format),
+            % and another depth saturates and quantises differently, so
+            % scans from another mode (depth or offset) are not taken as
+            % fitting until that is shown on the rig (notebook, 2026-11-02).
             compatible = true;
             message = "At this camera area.";
             [devices, ~] = hadamard_stim.luminos.resolve_hardware(obj.App, obj.Options.profile);
@@ -474,6 +485,17 @@ classdef LuminosBackend < handle
                 message = sprintf('Taken at camera area %s, bin %g; the camera is now at %s, bin %g.', ...
                     mat2str(reshape(record.camera.roi, 1, [])), record.camera.bin, ...
                     mat2str(reshape(double(roi), 1, [])), double(camera.bin));
+            end
+            was = scan_set_format(record);
+            now_ = hadamard_stim.luminos.camera_format(camera);
+            if was.storage_bits ~= now_.storage_bits || (~isnan(was.pixel_bits) && was.pixel_bits ~= now_.pixel_bits) ...
+                    || was.offset ~= now_.offset
+                if compatible
+                    message = "";
+                end
+                compatible = false;
+                message = strip(string(message) + " " + sprintf('Taken in %s (%s); the camera now records %s (%s).', ...
+                    was.description, was.mode_label, now_.description, now_.mode_label));
             end
         end
 
@@ -597,5 +619,17 @@ catch
 end
 if ~isscalar(t)
     t = "";
+end
+end
+
+function format = scan_set_format(record)
+% The scans' format; a set recorded before 8-bit support is 16-bit
+% (preflight refused every other depth), its mode not recorded.
+if isfield(record.camera, "format") && isstruct(record.camera.format)
+    format = hadamard_stim.luminos.camera_format(record.camera.format);
+else
+    format = hadamard_stim.luminos.camera_format(16);
+    format.pixel_bits = NaN;
+    format.mode_label = "mode not recorded";
 end
 end

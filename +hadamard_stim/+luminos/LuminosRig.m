@@ -10,7 +10,10 @@ classdef LuminosRig < handle
     %   and frame count comes from +protocol.
     %
     %   begin(cfg)            preflight (read only); refuses on any blocker,
-    %                         returning the report (warnings do not refuse)
+    %                         returning the report (warnings do not refuse).
+    %                         The imaging camera's storage format then
+    %                         (camera_format) holds until release: an
+    %                         acquisition after it changes is refused
     %   motor_position()      stage.Get_Current_Position(), in mm
     %   motor_move_to(z)      stage.Move_To_Position(z), blocking
     %   dmd_load_stack(m)     pattern_stack + Write_Stack('slave'), owned
@@ -43,6 +46,7 @@ classdef LuminosRig < handle
         Devices struct = struct()
         DmdSettings = []              % picture_time_us, trigger_edge (from begin)
         DaqRate = []
+        ImagingFormat = []            % camera_format of the imaging camera at begin
         moves = zeros(0, 3)           % [from, to, reached], every stage move
         acquisitions = struct([])     % what each acquisition did (no samples)
         LastRelease = []              % report of the last release()
@@ -98,6 +102,7 @@ classdef LuminosRig < handle
             obj.DmdSettings = struct("picture_time_us", cfg.dmd.picture_time_us, ...
                 "trigger_edge", cfg.dmd.trigger_edge);
             obj.DaqRate = cfg.daq.rate;
+            obj.ImagingFormat = hadamard_stim.luminos.camera_format(report.devices.camera);
             report = rmfield(report, "devices");
         end
 
@@ -278,6 +283,7 @@ classdef LuminosRig < handle
                 error("hadamard_stim:AcquisitionActive", ...
                     "Luminos is already acquiring; the protocol's acquisition was not started.");
             end
+            format = obj.imagingFormat();
             cameras = reshape(obj.Devices.cameras, 1, []);
             plan = hadamard_stim.luminos.camera_plan(spec, string({cameras.name}), obj.Profile);
             streams = spec_streams(spec);
@@ -355,7 +361,8 @@ classdef LuminosRig < handle
             end
             acq.luminos_folder = folder;
             acq.imaging = struct("camera", imaging.name, "file", fullfile(folder, imaging.file), ...
-                "frame_size", floor([roi(4) roi(2)] ./ double(camera.bin)), "frames", imaging.frames_requested);
+                "frame_size", floor([roi(4) roi(2)] ./ double(camera.bin)), "frames", imaging.frames_requested, ...
+                "format", format);
             acq.behavior = struct("camera", "", "file", "", "frames", 0, ...
                 "status", "disabled in the configuration");
             if streams.face_camera
@@ -395,12 +402,27 @@ classdef LuminosRig < handle
         end
 
         function im = movie_mean(obj, acq, frames) %#ok<INUSD>
-            mov = hadamard_stim.luminos.read_frames(acq.imaging.file, acq.imaging.frame_size, frames);
+            mov = hadamard_stim.luminos.acquisition_frames(acq, frames);
             im = mean(double(mov), 3);
         end
     end
 
     methods (Access = private)
+        function format = imagingFormat(obj)
+            % The imaging camera's format now, which must be the one begin
+            % saw: a run's movies, reference images and bleaching
+            % measures are all in one camera mode's counts.
+            format = hadamard_stim.luminos.camera_format(obj.device("camera"));
+            was = obj.ImagingFormat;
+            if ~isempty(was) && ~same_format(was, format)
+                error("hadamard_stim:CameraFormatChanged", ...
+                    ['The imaging camera now records %s (%s); this session began with %s (%s). ' ...
+                     'A run''s movies and measures are all in one camera mode''s counts: switch ' ...
+                     'the Camera tab back, or stop and start again.'], format.description, ...
+                    format.mode_label, was.description, was.mode_label);
+            end
+        end
+
         function d = device(obj, role)
             if ~isfield(obj.Devices, role) || isempty(obj.Devices.(role))
                 error("hadamard_stim:NotBegun", ...
@@ -582,4 +604,9 @@ for r = reshape(existing, 1, [])
     inputs(end+1, 1) = struct("name", r.name, "port", r.port, "script_owner", char(owner)); %#ok<AGROW>
 end
 inputs = [inputs; ours(:)];
+end
+
+function tf = same_format(a, b)
+tf = a.storage_bits == b.storage_bits && a.pixel_bits == b.pixel_bits ...
+    && a.mode_id == b.mode_id && a.compression == b.compression;
 end

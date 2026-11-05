@@ -26,6 +26,8 @@ function view = controller_view(controller, name, args)
 %                      resume continues from (ui.checkpoint_summary)
 %     diagnostics      what the rig's devices report now (backend)
 %     run_folders      run folders a resume could continue (backend)
+%     reference_snaps  the imaging camera's Luminos Snaps, newest first, for
+%                      load_reference_snap (backend)
 %     calibration_scan_sets   earlier Hadamard calibration scan sets, with
 %                      whether each fits the camera now (backend); reusing
 %                      one is set_rig_settings with its folders
@@ -64,6 +66,9 @@ try
         case "run_folders"
             require_backend(controller);
             view.data = controller.Backend.run_folders();
+        case "reference_snaps"
+            require_backend(controller);
+            view.data = controller.Backend.reference_snaps();
         case "calibration_scan_sets"
             require_backend(controller);
             view.data = controller.Backend.calibration_scan_sets();

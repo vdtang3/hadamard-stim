@@ -342,6 +342,51 @@ classdef LuminosBackend < handle
                 wheel_encoder_lines=obj.Settings.wheel_encoder_lines);
         end
 
+        function geometry = geometry(obj)
+            % The active DMD calibration (active_geometry), for drawing
+            % cells before the rig is prepared. Read only: no device is
+            % begun or claimed, and drawing projects nothing.
+            [dmd, camera] = obj.dmdAndCamera();
+            [geometry, ~] = hadamard_stim.luminos.active_geometry(dmd, camera);
+        end
+
+        function [image, source] = load_reference_snap(obj, file)
+            % A Luminos Snap (the Snap button's or the HiLo tab's .mat) as
+            % the reference image, if it is in the DMD calibration's camera
+            % grid (check_reference_snap). The image is returned exactly as
+            % saved. Read only, like geometry.
+            [dmd, ~] = obj.dmdAndCamera();
+            [image, snap] = hadamard_stim.luminos.read_reference_snap(file);
+            fit = hadamard_stim.luminos.check_reference_snap(snap, dmd, ...
+                obj.Options.profile.devices.camera.name);
+            [folder, ~] = fileparts(file);
+            source = struct("kind", "snap", "folder", string(folder), "file", snap.file, ...
+                "snap", rmfield(snap, "file"), "fit", fit);
+        end
+
+        function snaps = reference_snaps(obj)
+            % The imaging camera's Snaps (<data folder>/Snaps/*_cam-<camera>.mat),
+            % today's and the dated folders beside it, newest first.
+            snaps = struct("file", {}, "name", {}, "modified", {});
+            today = string(read(obj.App, "datafolder", ""));
+            if strlength(today) == 0
+                return
+            end
+            tag = "_cam-" + regexprep(obj.Options.profile.devices.camera.name, "[^A-Za-z0-9]", "");
+            found = [dir(fullfile(today, "Snaps", "*" + tag + ".mat")); ...
+                dir(fullfile(fileparts(today), "*", "Snaps", "*" + tag + ".mat"))];
+            [~, unique_rows] = unique(fullfile(string({found.folder}), string({found.name})), "stable");
+            found = found(unique_rows);
+            [~, order] = sort([found.datenum], "descend");
+            for f = reshape(found(order), 1, [])
+                [~, day] = fileparts(fileparts(f.folder));
+                snaps(end+1) = struct("file", string(fullfile(f.folder, f.name)), ...
+                    "name", string(day) + "/" + string(f.name), ...
+                    "modified", string(datetime(f.datenum, "ConvertFrom", "datenum", ...
+                    "Format", "yyyy-MM-dd HH:mm"))); %#ok<AGROW>
+            end
+        end
+
         function d = diagnostics(obj)
             d = hadamard_stim.luminos.diagnostics(obj.App, obj.Options.profile);
             d.blue_calibration = obj.blueCalibrationStatus();
@@ -377,6 +422,17 @@ classdef LuminosBackend < handle
     end
 
     methods (Access = private)
+        function [dmd, camera] = dmdAndCamera(obj)
+            [devices, ~] = hadamard_stim.luminos.resolve_hardware(obj.App, obj.Options.profile);
+            dmd = devices.dmd;
+            camera = devices.camera;
+            if isempty(dmd) || isempty(camera)
+                error("hadamard_stim:NoDmdCalibration", ...
+                    "The DMD calibration cannot be read: Luminos has no %s and %s by those names.", ...
+                    obj.Options.profile.devices.dmd.name, obj.Options.profile.devices.camera.name);
+            end
+        end
+
         function folder = dataRoot(obj)
             folder = obj.Settings.run_root;
             if strlength(folder) == 0

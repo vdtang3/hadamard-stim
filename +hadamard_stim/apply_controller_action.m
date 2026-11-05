@@ -30,6 +30,9 @@ function response = apply_controller_action(controller, action, payload, expecte
 %     prepare_rig           build the environment from the backend
 %     acquire_reference_image   one Hadamard scan, reconstructed
 %     set_reference_image   payload.image
+%     load_reference_snap   payload.file: a Luminos Snap's .mat as the
+%                           reference image (checked against the DMD
+%                           calibration; no rig preparation, no hardware)
 %     propose_cells, approve_cells, acquire_z_reference
 %     start_run             payload.run_folder (optional with a backend)
 %                           payload.acknowledged_warnings: the ids of the
@@ -60,7 +63,8 @@ arguments
 end
 known = ["set_config" "update_config" "set_rig_settings" "run_preflight" ...
     "acquire_calibration_scans" "calibrate_blue_led" "run_commissioning_check" "prepare_rig" ...
-    "acquire_reference_image" "set_reference_image" "propose_cells" "approve_cells" ...
+    "acquire_reference_image" "set_reference_image" "load_reference_snap" ...
+    "propose_cells" "approve_cells" ...
     "acquire_z_reference" "start_run" "resume_run" "stop_after_current" "abort" "new_session" ...
     "start_orange_preview" "stop_orange_preview" "export_orange_mask"];
 if ~ismember(action, known)
@@ -114,6 +118,11 @@ try
             controller.acquireReferenceImage();
         case "set_reference_image"
             controller.setReferenceImage(payload.image);
+        case "load_reference_snap"
+            if ~isfield(payload, "file") || isempty(payload.file)
+                error("hadamard_stim:NoSnapFile", "Choose the Snap to load.");
+            end
+            controller.loadReferenceSnap(string(payload.file));
         case "propose_cells"
             controller.proposeCells();
         case "approve_cells"

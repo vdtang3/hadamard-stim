@@ -1250,6 +1250,74 @@ orange illumination and use it from Luminos's own tabs.
   export does not turn it on), and the export is of the cells as approved,
   not as redrawn after drift correction during a run.
 
+## 2026-11-03: a Luminos Snap as the reference image
+
+Asked for (Vincent): HiLo tab → Snap → Hadamard Stim → segmentation →
+approve → orange DMD mask → preview / export, as an alternative to the
+Hadamard reference scan, which stays as it was.
+
+- **Action** `load_reference_snap` (payload `file`), legal with a backend in
+  CONFIGURING / CELLS_PROPOSED; view `reference_snaps` lists the imaging
+  camera's Snaps (`<data folder>/Snaps/*_cam-<camera>.mat`, today's and the
+  dated folders beside it). The image becomes `ReferenceImage` exactly as
+  saved (double of `snap.img`); `ReferenceSource` is kind "snap" with the
+  file, the Snap's description (camera, type, ROI, bin, timestamp,
+  transforms, HiLo provenance, image sha256) and how it fits.
+- **Reading** (`luminos.read_reference_snap`) follows Adaptive Optopatch's
+  `read_reference_snapshot` rules for the same files (img, name, ref2d
+  required; bin, timestamp optional; ref2d world limits are the ROI in
+  unbinned sensor pixels; tform by DMD name). Copied, not shared: the two
+  packages do not depend on each other, and Firefly does not have AO on
+  its path.
+- **Compatibility** (`luminos.check_reference_snap`). Cells are drawn by
+  Luminos's `setPatterningROI`, which takes a mask to be in the grid of the
+  DMD calibration's reference image (`dmd.refimage`: its ROI origin, size,
+  binning). So a Snap must be that grid exactly, from the calibrated
+  camera, with a calibration for it in use; its image must be one frame of
+  its own ROI (a transposed image fails here); a transform it recorded for
+  this DMD must be the calibration in use (otherwise it was taken under
+  another calibration). Each is a refusal (`hadamard_stim:IncompatibleSnap`)
+  naming what differs. Nothing is resampled, shifted or flipped to fit: the
+  scan path's `active_geometry` only warns about a camera-area mismatch,
+  but a Snap chosen by hand is cheap to retake at the right area.
+  A Snap with no transform for this DMD is accepted and says so.
+- **No preparation, no hardware.** Segmenting needs only the geometry;
+  before the rig is prepared the backend reads it (`geometry()`:
+  `active_geometry` on the resolved devices, nothing begun; drawing
+  projects nothing). So loading, segmenting, approving and exporting need
+  neither the Hadamard calibration scans nor the blue calibration, and
+  touch no device (tested against every device property and the device
+  log). With a prepared rig, segmentation uses `Env.geometry` as before.
+  The geometry identity used is kept with the proposal and the cells
+  (`ProposalGeometry`, `CellsGeometry`) and is what the mask export
+  records, prepared or not.
+- **Limits, on purpose.** The orange preview is a hardware session and
+  still needs Prepare rig (so the scans, for a configuration that
+  reconstructs them); making it work unprepared would mean a new preflight
+  purpose and a second rig path. Drift correction registers each Hadamard
+  scan to the reference image, so a drift-correcting run with a Snap
+  reference is blocked (readiness `reference_kind`, and `start_run`); a
+  spontaneous session without drift correction may run. The run recipe
+  records the reference image's hash, not its source.
+- **HiLo on Firefly.** HiLo is on Luminos's `vdtang3/blanket-depolarization`
+  branch (the VU), not on Firefly's `vdtang3/hadamard-stim`. Any Camera
+  Snap loads the same way; a HiLo Snap on Firefly needs that branch merged.
+- **Tests** (`TestReferenceSnap`). The acceptance test: the same image as a
+  scan reference on a prepared rig and as a Snap on an unprepared one give
+  identical cells, spots and masks, the same geometry identity, and an
+  export the DMD tab's `pdHadamard_Stim_Orange_Mask` reads back as that
+  mask; the preview shows it. Also: no Hadamard calibration and no
+  commissioning needed, no device touched; the image used exactly; every
+  refusal (camera, transposed, ROI origin, binning, area, transform, NaN,
+  not a .mat, no snap, missing) changes nothing; the drift blocker; the
+  listing. A real Firefly Snap (`20261030/Snaps/161218_cam-TeledyneKinetix`,
+  full sensor) is read as written and refused against the 448 x 328
+  calibration, accepted when the calibration is at its area with its
+  transform. Off the suite: a HiLo Snap written by the HiLo branch's own
+  `create_hilo_snap` (CL_RefImage with provenance) loaded, segmented (320
+  cells), approved and exported on the fake Firefly, unprepared. No real
+  HiLo Snap exists yet (20261020's HiLo run failed before its Snap).
+
 ## Parity issues (behaviour that may be a bug; reproduced, not fixed)
 
 - **P1. Reference-image orientation changed after the experiments.** `hadamard_ref.m` gained a transpose on 2026-02-10, after his 2025 data, alongside a Kinetix MEX change. In the newest snapshot, segmentation would run on the transposed image while drift correction compares untransposed scans with the untransposed `hadamard_ref`. The fixtures follow his 2025-03-08 session, which is the untransposed behaviour he actually ran. In Luminos the reference image, scans and DMD calibration must all share Luminos's camera orientation. **Confirmed 2026-10-13: the port follows the untransposed 2025 behaviour.** The transposed `hadamard_ref.m` stays frozen only as evidence.

@@ -15,7 +15,8 @@ classdef HadamardStimController < handle
     %   The session follows his order of work, one step at a time:
     %     CONFIGURING      edit the configuration; take the Hadamard
     %                      calibration scans on a slide; prepare the rig;
-    %                      take or set the reference image
+    %                      take or set the reference image, or load a
+    %                      Luminos Snap as it (no rig preparation needed)
     %     CELLS_PROPOSED   segmentation run on the reference image; look at
     %                      the cells and min_val, then approve or re-run
     %     CELLS_APPROVED   the canonical geometry is fixed from here on
@@ -54,8 +55,14 @@ classdef HadamardStimController < handle
         Config struct
         Proposal = []          % cells from the last segmentation, not yet approved
         Cells = []             % approved canonical cells
+        % The DMD calibration the proposal / the approved cells were drawn
+        % with (geometry.identity).
+        ProposalGeometry = []
+        CellsGeometry = []
         ReferenceImage = []    % the Hadamard image the cells are found on
         ReferenceRevision (1, 1) double = 0
+        % kind "scan", "provided" or "snap" (then also file, snap, fit:
+        % what the Luminos Snap was and how it fits the DMD calibration)
         ReferenceSource struct = struct("kind", "", "folder", "")
         Reference = []         % z-stack reference (run_z_reference) plus had_ref
         RunFolder (1, 1) string = ""
@@ -215,13 +222,31 @@ classdef HadamardStimController < handle
             obj.adoptReferenceImage(im, struct("kind", "provided", "folder", ""));
         end
 
+        function loadReferenceSnap(obj, file)
+            % A Luminos Snap (the Snap button's or the HiLo tab's .mat) as
+            % the reference image, instead of a Hadamard scan. Refused
+            % unless it is in the DMD calibration's camera grid
+            % (luminos.check_reference_snap); the image is used exactly as
+            % saved. Read only: the rig need not be prepared (so neither
+            % the Hadamard calibration scans nor the blue calibration are
+            % needed) and no device is begun or claimed. Segmentation,
+            % approval, the orange preview and the export then work as
+            % for a scan; a run that drift-corrects does not (readiness).
+            obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED"]);
+            obj.requireBackend();
+            [im, source] = obj.Backend.load_reference_snap(string(file));
+            obj.adoptReferenceImage(im, source);
+        end
+
         function proposeCells(obj)
             obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED"]);
             obj.stopOrangePreview();
             if isempty(obj.ReferenceImage)
                 error("hadamard_stim:NoReferenceImage", "Set the reference image before segmenting.");
             end
-            obj.requireEnvironment();
+            if isempty(obj.Backend)
+                obj.requireEnvironment();
+            end
             obj.during("segmenting", @() obj.segmentBody());
         end
 
@@ -229,6 +254,7 @@ classdef HadamardStimController < handle
             obj.assertIdle("CELLS_PROPOSED");
             obj.stopOrangePreview();
             obj.Cells = obj.Proposal;
+            obj.CellsGeometry = obj.ProposalGeometry;
             obj.LifecycleState = "CELLS_APPROVED";
             if ~needs_z_stack(obj.Config)
                 % A spontaneous session without drift correction compares
@@ -256,6 +282,8 @@ classdef HadamardStimController < handle
             obj.stopOrangePreview();
             obj.Proposal = [];
             obj.Cells = [];
+            obj.ProposalGeometry = [];
+            obj.CellsGeometry = [];
             obj.ReferenceImage = [];
             obj.ReferenceRevision = obj.ReferenceRevision + 1;
             obj.ReferenceSource = struct("kind", "", "folder", "");
@@ -517,7 +545,8 @@ classdef HadamardStimController < handle
             state.has_reference_image = ~isempty(obj.ReferenceImage);
             state.reference = struct("revision", obj.ReferenceRevision, ...
                 "size", size(obj.ReferenceImage), "source", obj.ReferenceSource.kind, ...
-                "folder", obj.ReferenceSource.folder);
+                "folder", obj.ReferenceSource.folder, "file", field_or(obj.ReferenceSource, "file", ""), ...
+                "snap", snap_summary(obj.ReferenceSource));
             state.proposal = [];
             if ~isempty(obj.Proposal)
                 state.proposal = struct("n_cells", size(obj.Proposal.cell_coord, 1), ...
@@ -608,7 +637,10 @@ classdef HadamardStimController < handle
             legal.run_commissioning_check = backend && early;
             legal.acquire_reference_image = env && early;
             legal.set_reference_image = early;
-            legal.propose_cells = early && env && ~isempty(obj.ReferenceImage);
+            legal.load_reference_snap = backend && early;
+            % Drawing cells needs only the DMD calibration, which a backend
+            % reads without preparing the rig.
+            legal.propose_cells = early && (env || backend) && ~isempty(obj.ReferenceImage);
             legal.approve_cells = idle && s == "CELLS_PROPOSED";
             legal.acquire_z_reference = idle && env && ismember(s, ["CELLS_APPROVED" "READY"]);
             legal.start_run = idle && s == "READY" && obj.hasZStackFor(obj.Config);
@@ -656,10 +688,7 @@ classdef HadamardStimController < handle
                 "rasterization", "auto_square");
             info.reference = struct("source", obj.ReferenceSource, ...
                 "image_size", size(obj.ReferenceImage), "image", single(obj.ReferenceImage));
-            info.dmd_calibration = [];
-            if isfield(obj.Env, "geometry") && isfield(obj.Env.geometry, "identity")
-                info.dmd_calibration = obj.Env.geometry.identity;
-            end
+            info.dmd_calibration = obj.CellsGeometry;
             info.imaging_format_prepared = [];
             if isfield(obj.Env, "context") && isfield(obj.Env.context, "hardware") ...
                     && isfield(obj.Env.context.hardware, "imaging_format")
@@ -866,8 +895,16 @@ classdef HadamardStimController < handle
         end
 
         function segmentBody(obj)
+            % The prepared rig's geometry; before preparing, the backend
+            % reads the same active DMD calibration.
+            if obj.hasEnvironment()
+                geometry = obj.Env.geometry;
+            else
+                geometry = obj.Backend.geometry();
+            end
             obj.Proposal = hadamard_stim.protocol.segment_cells(obj.Config, ...
-                obj.ReferenceImage, obj.Env.geometry);
+                obj.ReferenceImage, geometry);
+            obj.ProposalGeometry = geometry.identity;
             obj.LifecycleState = "CELLS_PROPOSED";
         end
 
@@ -1000,6 +1037,12 @@ classdef HadamardStimController < handle
                 items(end+1) = item("cells", "Cells approved", "pass", ...
                     sprintf("%d cells.", size(obj.Cells.cell_coord, 1)));
             end
+            if needs_z_stack(cfg) && obj.ReferenceSource.kind == "snap"
+                items(end+1) = item("reference_kind", "Reference image for drift correction", "blocker", ...
+                    "The reference image is a Luminos Snap, not a Hadamard scan: drift correction " + ...
+                    "registers each Hadamard scan to it. Use it for cells and the orange mask " + ...
+                    "(preview, export); for this run take the reference image by Hadamard scan.");
+            end
             if needs_z_stack(cfg)
                 if obj.hasZStackFor(cfg)
                     items(end+1) = item("z_reference", "Z reference", "pass", "Acquired.");
@@ -1096,6 +1139,11 @@ classdef HadamardStimController < handle
             if ~obj.hasZStackFor(cfg)
                 error("hadamard_stim:NoZReference", ...
                     "This session drift-corrects against the reference z-stack; acquire it first.");
+            end
+            if needs_z_stack(cfg) && obj.ReferenceSource.kind == "snap"
+                error("hadamard_stim:SnapReference", ...
+                    ['This session drift-corrects each Hadamard scan against the reference image, ' ...
+                     'and that is a Luminos Snap. Take the reference image by Hadamard scan.']);
             end
             if ~is_spontaneous(cfg) && (~isfield(obj.Env, "blue_calibration") || isempty(obj.Env.blue_calibration))
                 error("hadamard_stim:NoBlueCalibration", ...
@@ -1413,6 +1461,18 @@ s = "";
 if n == 1
     s = "s";
 end
+end
+
+function s = snap_summary(source)
+% What the tab shows about a Snap reference; [] for any other source.
+s = [];
+if source.kind ~= "snap"
+    return
+end
+snap = source.snap;
+s = struct("type", snap.type, "camera", snap.name, "roi", snap.roi, "bin", snap.bin, ...
+    "timestamp", snap.timestamp, "sha256", snap.sha256, ...
+    "transform_recorded", source.fit.transform_recorded);
 end
 
 function v = field_or(s, name, default)

@@ -50,10 +50,20 @@ function methods_ = backend_interface()
 %                                  height], width, height, bin, frame_size
 %                                  [rows cols], bit_depth, bit_mode; [] when
 %                                  it cannot be read
+%     geometry = geometry()        the active DMD calibration (as env.geometry),
+%                                  read only, for drawing cells before the
+%                                  rig is prepared
+%     [image, source] = load_reference_snap(file)
+%                                  a Luminos Snap as the reference image,
+%                                  refused unless it is in the DMD
+%                                  calibration's camera grid; read only
+%     snaps = reference_snaps()    the imaging camera's Snaps (file, name,
+%                                  modified), newest first
 %
 %   Nothing here runs the experiment: every protocol step still goes
 %   through the environment's hardware (hadamard_stim.protocol.hardware_interface).
 methods_ = ["settings" "set_settings" "preflight" "environment" "diagnostics" ...
     "default_run_folder" "run_folders" "calibration_hardware" "record_calibration_scans" ...
-    "calibrate_blue_led" "calibration_scan_sets" "run_commissioning_check" "imaging_camera"];
+    "calibrate_blue_led" "calibration_scan_sets" "run_commissioning_check" "imaging_camera" ...
+    "geometry" "load_reference_snap" "reference_snaps"];
 end

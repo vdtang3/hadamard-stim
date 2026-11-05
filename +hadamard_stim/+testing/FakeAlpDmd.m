@@ -26,6 +26,7 @@ classdef FakeAlpDmd < hadamard_stim.testing.FakeLuminosDevice
         refimage = struct("img", zeros(328, 448), "bin", 1)
         ReferenceRoi = [0 0 448 328]   % reference_geometry: [x0 y0 width height]
         MeasuredUtc = 0                % when calibrated; 0 is "not recorded"
+        PairTransform = struct("A", eye(3))   % the calibration's camera->DMD transform
         % What the adapter loaded, as SimulatedRig records it.
         Stack = struct("sha256", "", "size", [0 0 0])
         Queue = []
@@ -165,7 +166,7 @@ classdef FakeAlpDmd < hadamard_stim.testing.FakeLuminosDevice
             end
             identity = struct("status", status, "has_pair_calibration", calibrated, ...
                 "active_transform_is_pair_transform", calibrated && obj.ActiveIsPair, ...
-                "pair_transform", struct("A", eye(3)), "measured_utc", obj.MeasuredUtc, "bin", 1, ...
+                "pair_transform", obj.PairTransform, "measured_utc", obj.MeasuredUtc, "bin", 1, ...
                 "roi", obj.ReferenceRoi, "mode", "fake");
         end
 

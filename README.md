@@ -250,6 +250,19 @@ cannot drive one output.
 
 **New FOV** starts the next field of view on the same prepared rig.
 
+**Alternative reference: a Luminos Snap (e.g. HiLo).** Instead of step 2,
+under Reference image, **Find Snaps** lists the imaging camera's Snaps
+(`<data folder>/Snaps/*_cam-TeledyneKinetix.mat`, newest first); choose
+one and **Load reference Snap**. It must be taken at the DMD calibration's
+camera area: the same ROI origin and size, binning and camera, and (if the
+Snap recorded one) the same DMD transform. Anything else is refused with
+what differs; nothing is resampled or flipped. Loading, Segment, Approve
+cells and Export orange DMD mask need neither Prepare rig nor the Hadamard
+calibration scans, and touch no hardware. The orange preview is a hardware
+session and needs the prepared rig, as always (Prepare before Segment: it
+clears proposed cells). A run that drift-corrects is blocked with a Snap
+reference, because drift correction registers Hadamard scans to it.
+
 **Fallback: the orange mask in ordinary Luminos.** After step 3, **Export
 orange DMD mask** (under Cells, below the preview) saves the approved
 cells' orange mask, the exact array the preview and the trials use, as

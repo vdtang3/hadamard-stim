@@ -38,12 +38,13 @@ classdef TestReadinessPolicy < matlab.unittest.TestCase
 
         function onlyTheTwoDmdChecksAreReadiness(testCase)
             % No driver probe and no power-on edge: neither is required,
-            % recorded or shown. A missing slide test is a warning; a
-            % missing queue-support record is history (the live driver is
-            % asked at every preflight).
+            % recorded or shown. Since 2026-11-04 the two DMD records are
+            % commissioning history, not routine readiness: a missing slide
+            % test and a missing queue-support record are notes (the live
+            % driver is asked at every preflight).
             gate = hadamard_stim.metadata.hardware_gate(struct("hardware_validation", struct()));
             testCase.verifyEqual(string({gate.items.id}), "firefly_" + ["queue_support" "slide_queue"]);
-            testCase.verifyEqual(string({gate.items.status}), ["info" "warning"]);
+            testCase.verifyEqual(string({gate.items.status}), ["info" "info"]);
             testCase.verifyEqual(gate.missing, "slide_queue");
             testCase.verifyEqual(hadamard_stim.metadata.hardware_checks("connectivity"), "slide_queue");
             testCase.verifyEmpty(hadamard_stim.metadata.hardware_checks("spontaneous"));
@@ -76,12 +77,14 @@ classdef TestReadinessPolicy < matlab.unittest.TestCase
             testCase.verifyEqual(unique(arrayfun(@(a) string(a.queue_settings.trigger_edge), queues)), "rising");
         end
 
-        function aFailedSlideTestIsAProminentWarning(testCase)
+        function aFailedSlideTestIsANoteThatSaysWhatItMeans(testCase)
+            % History, not a warning to acknowledge (2026-11-04), but it
+            % still says plainly what the failure means.
             failed = struct("passed", false, "evidence", "9 of 12 triggers.", "date", today_utc());
             gate = hadamard_stim.metadata.hardware_gate(struct("hardware_validation", ...
                 struct("slide_queue", failed)));
             item = gate.items(string({gate.items.id}) == "firefly_slide_queue");
-            testCase.verifyEqual(item.status, "warning");
+            testCase.verifyEqual(item.status, "info");
             testCase.verifySubstring(item.message, "FAILED");
             testCase.verifySubstring(item.consequence, "NOT playing as the protocol models");
             testCase.verifySubstring(item.consequence, "diagnostic data");
@@ -89,7 +92,8 @@ classdef TestReadinessPolicy < matlab.unittest.TestCase
 
         function aSlideTestIsEvidenceUntilTheDmdPathChanges(testCase)
             % Age is shown only. Another board, another edge, or Luminos's
-            % DMD code changed since: a warning. Another Luminos commit with
+            % DMD code changed since: a note that says why and to rerun it
+            % (a warning before 2026-11-04). Another Luminos commit with
             % the same DMD code, or one that cannot be compared, and another
             % hadamard-stim commit: a note.
             p = struct("luminos_commit", "aaaaaaaa11", "hadamard_stim_commit", "cccccccc33", "dmd_serial", 7);
@@ -115,7 +119,7 @@ classdef TestReadinessPolicy < matlab.unittest.TestCase
             changed.dmd_code_changed = true;
             changed.dmd_code_changes = "src/Devices/Patterning/DMD/ALP/ALP_DMD.m";
             item = slide(changed);
-            testCase.verifyEqual(item.status, "warning");
+            testCase.verifyEqual(item.status, "info");
             testCase.verifySubstring(item.consequence, "DMD code changed since it was run");
             testCase.verifySubstring(item.consequence, "ALP_DMD.m");
 
@@ -124,10 +128,11 @@ classdef TestReadinessPolicy < matlab.unittest.TestCase
             testCase.verifyEqual(slide(changed).status, "info");
             changed = current;
             changed.dmd_serial = "8";
-            testCase.verifyEqual(slide(changed).status, "warning");
+            testCase.verifyEqual(slide(changed).status, "info");
+            testCase.verifySubstring(slide(changed).consequence, "DMD serial 7");
             changed = current;
             changed.trigger_edge = "falling";
-            testCase.verifyEqual(slide(changed).status, "warning");
+            testCase.verifyEqual(slide(changed).status, "info");
             testCase.verifySubstring(slide(changed).consequence, "run on the rising edge");
             % Queue support is history whatever it says.
             changed.dmd_serial = "8";
@@ -184,7 +189,7 @@ classdef TestReadinessPolicy < matlab.unittest.TestCase
             c.runPreflight();
             testCase.verifyTrue(c.Preflight.can_run);
             checks = c.Preflight.checks;
-            testCase.verifyEqual(string({checks([checks.status] == "warning").id}), "firefly_slide_queue");
+            testCase.verifyEqual(checks(string({checks.id}) == "firefly_slide_queue").status, "info");
             app.getDevice("ALP_DMD").mexPointer = 0;
             c.runPreflight();
             testCase.verifyFalse(c.Preflight.can_run);
@@ -308,20 +313,23 @@ classdef TestReadinessPolicy < matlab.unittest.TestCase
 
         % ---- Controller --------------------------------------------------
 
-        function warningsAloneDoNotStopRunAndTheOverrideIsRecordedOnResumeToo(testCase)
-            % Commissioning never recorded: warnings. A run starts only with
-            % all of them acknowledged; a resume asks again for the rig's
-            % warnings (not for the configuration's) and records it.
+        function warningsAloneDoNotStopRunAndTheOverrideIsRecorded(testCase)
+            % A setting that differs from Yitong's is a warning: the run
+            % starts only with it acknowledged, and the recipe records it.
+            % A resume does not ask again for the configuration's warnings
+            % (they were acknowledged at the start). Commissioning records
+            % never recorded are not warnings (2026-11-04).
             [c, cfg, ref] = simulated_session(testCase.Root);
             c.Env.context.simulated = false;
             c.Env.context.hardware_validation = [];
             cfg.trials.last = 2;
+            cfg.stimulation.ir_v = 0.6;
             ready(c, cfg, ref);
             readiness = c.getState().readiness;
             testCase.verifyTrue(readiness.can_run);
             testCase.verifyTrue(c.legalActions().start_run);
             ids = string({readiness.warnings.id});
-            testCase.verifyEqual(ids, "firefly_slide_queue");
+            testCase.verifyEqual(ids, "config_deviations");
             testCase.verifyError(@() c.startRun(testCase.Folder), "hadamard_stim:WarningsNotAcknowledged");
             testCase.verifyFalse(isfile(fullfile(testCase.Folder, "run_recipe.json")));
 
@@ -333,14 +341,11 @@ classdef TestReadinessPolicy < matlab.unittest.TestCase
             testCase.verifyEqual(string({recipe.start_override.warnings.id}), ids);
             testCase.verifyEqual(recipe.start_override.operator_note, "bring-up");
 
-            testCase.verifyError(@() c.resumeRun(testCase.Folder), "hadamard_stim:WarningsNotAcknowledged");
-            r = hadamard_stim.apply_controller_action(c, "resume_run", ...
-                struct("acknowledged_warnings", ids), c.Revision);
+            r = hadamard_stim.apply_controller_action(c, "resume_run", struct(), c.Revision);
             testCase.verifyTrue(r.ok, r.message);
             testCase.verifyEqual(c.LifecycleState, "COMPLETED");
             record = jsondecode(fileread(fullfile(testCase.Folder, "resumes", "resume_001.json")));
-            testCase.verifyTrue(record.operator_override);
-            testCase.verifyEqual(string({record.override.warnings.id}), ids);
+            testCase.verifyFalse(record.operator_override);
             testCase.verifyFalse(record.calibration_changed);
         end
 
@@ -369,8 +374,10 @@ classdef TestReadinessPolicy < matlab.unittest.TestCase
 
         function setupGoesAheadWithWarnings(testCase)
             % Preparing and the reference scan are not a run: warnings are
-            % shown but need no acknowledgement.
+            % shown but need no acknowledgement. (The warning here is a
+            % setting that differs from Yitong's.)
             [c, ~, cfg] = tab_session(testCase.Folder, validated=false);
+            cfg.stimulation.ir_v = 0.6;
             c.setConfig(cfg);
             c.runPreflight();
             testCase.verifyNotEmpty(c.getState().readiness.warnings);

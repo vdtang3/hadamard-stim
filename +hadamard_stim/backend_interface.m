@@ -31,6 +31,11 @@ function methods_ = backend_interface()
 %                                  needs no environment. The caller runs
 %                                  protocol.acquire_calibration_scans on it
 %                                  and releases it
+%     hw = orange_preview_hardware(cfg)
+%                                  hardware begun for the orange preview
+%                                  only (the DMD and its calibration); it
+%                                  needs no environment. The caller shows
+%                                  the mask and releases it
 %     r = calibrate_blue_led()     the rig's own slide calibration of the
 %                                  blue light; the rig keeps it, and the
 %                                  environment reads it from there
@@ -65,5 +70,5 @@ function methods_ = backend_interface()
 methods_ = ["settings" "set_settings" "preflight" "environment" "diagnostics" ...
     "default_run_folder" "run_folders" "calibration_hardware" "record_calibration_scans" ...
     "calibrate_blue_led" "calibration_scan_sets" "run_commissioning_check" "imaging_camera" ...
-    "geometry" "load_reference_snap" "reference_snaps"];
+    "geometry" "load_reference_snap" "reference_snaps" "orange_preview_hardware"];
 end

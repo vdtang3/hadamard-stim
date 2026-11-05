@@ -35,6 +35,10 @@ function report = preflight(app, cfg, options)
 %   purpose "calibration_scan" (acquire_calibration_scans, on a slide)
 %   needs only the DAQ, the DMD and the imaging camera: no stage, no blue
 %   LED, no DMD calibration (the scan covers the whole DMD), no streams.
+%   purpose "orange_preview" (showing the approved cells' orange mask)
+%   needs only the DMD (open, not owned by another, his canvas, not
+%   inverted) and its calibration for the imaging camera: nothing a run
+%   needs (DAQ, camera mode, scans, blue calibration, streams) is checked.
 %
 %   Nothing is written to any device, and the protocol state is not
 %   touched: every check reads a property or calls an inquiry method.
@@ -45,11 +49,12 @@ arguments
     options.blue_threshold = []
     options.profile struct = hadamard_stim.luminos.firefly_profile()
     options.wheel_encoder_lines string = strings(1, 0)
-    options.purpose (1, 1) string {mustBeMember(options.purpose, ["run" "calibration_scan"])} = "run"
+    options.purpose (1, 1) string {mustBeMember(options.purpose, ["run" "calibration_scan" "orange_preview"])} = "run"
     options.now (1, 1) datetime = datetime("now", "TimeZone", "UTC")
 end
 profile = options.profile;
 calibrating = options.purpose == "calibration_scan";
+previewing = options.purpose == "orange_preview";
 lines = options.wheel_encoder_lines;
 if isempty(lines)
     lines = profile.wheel_encoder.lines;
@@ -128,6 +133,10 @@ else
 end
 for role = string(fieldnames(profile.devices))'
     requirement("device_" + role, profile.devices.(role).name + " is available");
+    if previewing && ~ismember(role, ["dmd" "camera"])
+        set_status("not_needed", "Not needed: the orange preview uses only the DMD and the orange LED.");
+        continue
+    end
     if role == "behavior_camera" && ~face_camera
         message = "The face camera is off in the configuration.";
         if calibrating
@@ -158,7 +167,7 @@ if ~isempty(dmd)
             'when Luminos started).'], dmd.name), "Nothing can be projected: restart Luminos with the board connected.");
     end
     requirement("dmd_queue", "The DMD supports the sequence queue");
-    if spontaneous || calibrating
+    if spontaneous || calibrating || previewing
         set_status("not_needed", "Not needed: no stimulation queue is loaded.");
     elseif ~call(@() dmd.Supports_Sequence_Queue(), false)
         found("blocker", sprintf("%s reports no sequence-queue support (Supports_Sequence_Queue is false).", dmd.name), ...
@@ -183,6 +192,25 @@ if ~isempty(dmd)
         found("blocker", sprintf("%s has invert_output set.", dmd.name), ...
             "Every mask would be projected inverted: blue light on everything except the chosen cells.");
     end
+end
+
+if previewing
+    camera = devices.camera;
+    if ~isempty(dmd) && ~isempty(camera)
+        requirement("dmd_calibration", "DMD calibration for " + camera.name, "calibration");
+        try
+            [~, mismatch] = hadamard_stim.luminos.active_geometry(dmd, camera);
+            if strlength(mismatch.message) > 0
+                found("warning", mismatch.message, mismatch.consequence);
+            end
+        catch err
+            found("blocker", string(err.message), ...
+                "The cells' mask is placed on the DMD by this calibration; without it the preview would light the wrong mirrors.");
+        end
+    end
+    report = hadamard_stim.metadata.readiness_report(checks);
+    report.devices = devices;
+    return
 end
 
 % DAQ: its waveform settings, its clock, and no conflicting outputs.

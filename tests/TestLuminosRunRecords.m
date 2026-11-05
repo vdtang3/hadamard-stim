@@ -116,25 +116,28 @@ classdef TestLuminosRunRecords < matlab.unittest.TestCase
             testCase.verifyEqual(dmd.pattern_owner, "adaptive_optopatch");
         end
 
-        function withoutTheFireflyChecksARunAsksOnceAndRecordsTheOverride(testCase)
-            % Never-run commissioning checks are warnings: the run refuses
-            % until all of them are acknowledged together, then starts, and
-            % the recipe says which were acknowledged. The trial records
-            % are as in any run.
+        function aWarningIsAcknowledgedOnceAndTheOverrideRecorded(testCase)
+            % A warning (here: a setting that differs from Yitong's) refuses
+            % the run until every warning is acknowledged together; then it
+            % starts and the recipe says which were acknowledged. The trial
+            % records are as in any run. Never-run commissioning checks are
+            % not warnings (2026-11-04): a run without them is not asked.
             c = testCase.readySession(hardware_validation=[]);
+            cfg = c.Config;
+            cfg.stimulation.ir_v = 0.6;
+            c.setConfig(cfg);
             warnings = c.getState().readiness.warnings;
             ids = string({warnings.id});
-            testCase.verifyEqual(ids, "firefly_slide_queue");
+            testCase.verifyEqual(ids, "config_deviations");
             testCase.verifyTrue(c.getState().readiness.can_run);
             r = hadamard_stim.apply_controller_action(c, "start_run", ...
                 struct("run_folder", testCase.RunFolder), c.Revision);
             testCase.verifyEqual(r.identifier, "hadamard_stim:WarningsNotAcknowledged");
-            testCase.verifySubstring(r.message, "firefly_slide_queue");
-            testCase.verifySubstring(r.message, "could differ from the patterns in the trial records");
+            testCase.verifySubstring(r.message, "config_deviations");
             testCase.verifyFalse(isfolder(testCase.RunFolder));
             % Acknowledging another warning is not enough.
             r = hadamard_stim.apply_controller_action(c, "start_run", ...
-                struct("run_folder", testCase.RunFolder, "acknowledged_warnings", "config_deviations"), c.Revision);
+                struct("run_folder", testCase.RunFolder, "acknowledged_warnings", "firefly_slide_queue"), c.Revision);
             testCase.verifyEqual(r.identifier, "hadamard_stim:WarningsNotAcknowledged");
             testCase.verifyFalse(isfolder(testCase.RunFolder));
 

@@ -51,7 +51,11 @@ cfg.dmd.picture_time_us = 44;
 cfg.dmd.trigger_edge = "rising";    % explicit; his loader inherited the board's edge
 
 cfg.segmentation.threshold = 320;    % cells to keep
+cfg.segmentation.select_all = false; % keep every candidate instead of threshold
 cfg.segmentation.n_exclude = [];
+cfg.segmentation.candidate_pool = 1000;  % nROILim: regions ranked as candidates
+cfg.segmentation.min_area_px = 10;       % candidates are larger than this
+cfg.segmentation.filter_size_px = 7;     % gSiz = gSig, the detection filter
 cfg.segmentation.illum_spot_size = 5;   % Auto Square SquareSize
 cfg.segmentation.stim_spot_size = 3;    % reduce_spot_size_sequence(app, 3, 2)
 

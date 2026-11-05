@@ -79,20 +79,40 @@ classdef TestParityGeometry < matlab.unittest.TestCase
         end
 
         function aBlankImageSaysNoCellsWereDetected(testCase)
-            % A slide with nothing on it: too few regions to rank.
-            testCase.verifyError(@() hadamard_stim.yitong.static_image_seg_v5( ...
-                100 * ones(328, 448), 320, 0), "hadamard_stim:TooFewRegions");
-            % Enough regions, too few candidates for the cells asked for.
-            im = synthetic_reference_image();
+            % A slide with nothing on it: no region brighter than its
+            % surroundings, so no candidate.
             try
-                hadamard_stim.yitong.static_image_seg_v5(im, 5000, 0);
-                testCase.verifyFail("Asking for more cells than candidates did not error.");
+                hadamard_stim.yitong.static_image_seg_v5(100 * ones(328, 448), 320, 0);
+                testCase.verifyFail("A blank image gave cells.");
             catch err
                 testCase.verifyEqual(string(err.identifier), "hadamard_stim:TooFewCandidates");
                 testCase.verifySubstring(string(err.message), "No cells detected");
             end
-            % thres + n_exclude is exactly what it needs, and min_val thres + 99.
-            [~, ~, ~] = hadamard_stim.yitong.static_image_seg_v5(im, 50, 5);
+        end
+
+        function fewerCandidatesThanAskedForKeepsThemAllAndSaysSo(testCase)
+            % 2026-11-04: asking for more cells than there are candidates is
+            % not an error: all of them are kept, in his order, and info
+            % reports the counts. The cells are the top of the same ranking.
+            im = synthetic_reference_image();
+            [x, y, min_val, ~, info] = hadamard_stim.yitong.static_image_seg_v5(im, 5000, 5);
+            testCase.verifyEqual(info.n_requested, 5000);
+            testCase.verifyEqual(info.n_selected, info.n_available);
+            testCase.verifyEqual(info.n_available, info.n_candidates - 5);
+            testCase.verifyTrue(info.limited);
+            testCase.verifyLessThan(info.n_candidates, info.candidate_pool);
+            testCase.verifySize(x, [info.n_selected 1]);
+            [x320, y320] = hadamard_stim.yitong.static_image_seg_v5(im, 320, 5);
+            testCase.verifyEqual([x(end-319:end) y(end-319:end)], [x320 y320], ...
+                "the 320 highest-contrast cells are the same cells, in the same order");
+            % His curve compares the j-th kept-from-the-bottom with the j-th
+            % from the top; with every candidate kept, it exists only as
+            % far as the 5 skipped ones reach.
+            testCase.verifyTrue(all(isfinite(min_val(1:6))));
+            testCase.verifyTrue(all(isnan(min_val(7:end))));
+            % Only no candidate at all after skipping refuses.
+            testCase.verifyError(@() hadamard_stim.yitong.static_image_seg_v5(im, 10, info.n_candidates), ...
+                "hadamard_stim:TooFewCandidates");
         end
 
         function spotsReproduceHisSavedRois(testCase)

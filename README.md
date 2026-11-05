@@ -154,7 +154,7 @@ or when the experimenter has reason to distrust the calibration.
 | | What it measures | Required to run? | Sensible to repeat |
 |---|---|---|---|
 | **Sequence queue** (Run check) | whether the live ALP driver supports the sequence queue | connectivity: the live answer is; it is asked at every Check readiness anyway | after driver changes |
-| **Queue playback on slide** (Run on slide; uniform slide in place) | a small queue, loaded on the protocol's rising edge and stepped by DAQ triggers, imaged and compared picture by picture with the queue model | no: never run, failed, or run before a change to the DMD, its serial or Luminos's DMD code is a warning | after DMD, driver or Luminos DMD-code changes |
+| **Queue playback on slide** (Run on slide; uniform slide in place) | a small queue, loaded on the protocol's rising edge and stepped by DAQ triggers, imaged and compared picture by picture with the queue model | no: commissioning history, shown as a note (never run, failed, or run before a change to the DMD, its serial or Luminos's DMD code says so); never asked before a run | after DMD, driver or Luminos DMD-code changes |
 | **DMD geometry** (Luminos DMD tab) | the camera-to-DMD transform for the Teledyne Kinetix | yes: none for the Kinetix blocks; taken at another camera area is a warning | when the camera area, binning or light path changes |
 | **Hadamard calibration scans** (Take new scans, or Find earlier scans → Reuse) | his `had_cal` pinhole scans on a uniform slide, which every reconstruction uses | when drift correction or the z-reference is on; taken at another camera area or binning is a warning | when the camera area, binning or illumination changes |
 | **Blue LED calibration** (Calibrate blue LED; slide in place) | Luminos's slide calibration of the blue LED against the imaging camera | connectivity: yes (blocker without one) | when the LED, light path or camera settings change |
@@ -234,8 +234,32 @@ cannot drive one output.
 
 1. **Check readiness** (reads the rig, changes nothing) and **Prepare rig**
    if it is not prepared (once per session; both in Rig readiness).
+   Preparing is needed for Hadamard acquisitions (reference scan,
+   z-reference, runs) only. It can be repeated at any setup step and keeps
+   the reference image and the cells; only a DMD calibration other than
+   the one the cells were drawn with discards them (and new Hadamard
+   calibration scans the z-reference), and the tab says so.
 2. **Acquire reference image** (one Hadamard scan, reconstructed).
 3. **Segment**, inspect the cells on the image, then **Approve cells**.
+   The segmentation settings are under Cells (and in Configuration →
+   Segmentation); the defaults are Yitong's:
+   - **Cells to keep** (320), or **All detected candidates**. Fewer
+     candidates than asked for keeps them all and says so.
+   - **Skip top-contrast** (`n_exclude`, required).
+   - **Regions ranked** (1000): the sensitivity. Candidates are the
+     highest-contrast watershed regions, at most this minus 1. More cells
+     than about 980, or a dim reference, need more (Yitong's own image has
+     983 candidates at 1000 and 1755 at 2000).
+   - **Larger than (px)** (10): rejects small noise regions.
+   - Advanced: **Filter size (px)** (7, for his magnification).
+   **Segment** with changed settings re-segments the same reference image
+   (no new reference, no Prepare, no hardware) and discards proposed or
+   approved cells after asking; the counts (regions, candidates, selected,
+   requested) are shown under it, the cells on the image in Cells.
+   A connectivity run needs exactly `matrix.order` approved cells, and an
+   order MATLAB's `hadamard` can build (320, 384, 512, 640, 768, 1024,
+   1280): Readiness says so. Segmenting, the preview and the export work
+   for any count.
 4. **Preview orange illumination** (under Cells) to choose the starting
    orange voltage: the approved cells' orange mask is held on the DMD and
    the orange LED (Red LED 615) at Starting orange voltage while you watch
@@ -258,10 +282,11 @@ camera area: the same ROI origin and size, binning and camera, and (if the
 Snap recorded one) the same DMD transform. Anything else is refused with
 what differs; nothing is resampled or flipped. Loading, Segment, Approve
 cells and Export orange DMD mask need neither Prepare rig nor the Hadamard
-calibration scans, and touch no hardware. The orange preview is a hardware
-session and needs the prepared rig, as always (Prepare before Segment: it
-clears proposed cells). A run that drift-corrects is blocked with a Snap
-reference, because drift correction registers Hadamard scans to it.
+calibration scans, and touch no hardware. The orange preview needs no
+Prepare either: it claims only the DMD (refused if another owner has it)
+and the orange LED, and releases them on Stop, Abort or an error. A run
+that drift-corrects is blocked with a Snap reference, because drift
+correction registers Hadamard scans to it.
 
 **Fallback: the orange mask in ordinary Luminos.** After step 3, **Export
 orange DMD mask** (under Cells, below the preview) saves the approved

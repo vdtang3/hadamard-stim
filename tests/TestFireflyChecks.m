@@ -125,9 +125,10 @@ classdef TestFireflyChecks < matlab.unittest.TestCase
             c = hadamard_stim.HadamardStimController(backend);
             gate = @() string({c.Preflight.checks(startsWith(string({c.Preflight.checks.id}), "firefly_")).status});
             c.runPreflight();
-            % A failed queue-support record is history (the live driver says
-            % yes); a failed slide test is a warning.
-            testCase.verifyEqual(gate(), ["info" "warning"]);
+            % Both records are history (2026-11-04): a failed queue-support
+            % record (the live driver says yes) and a failed slide test are
+            % notes, not warnings a run must acknowledge.
+            testCase.verifyEqual(gate(), ["info" "info"]);
 
             results = {hadamard_stim.checks.queue_support_check(app), ...
                 hadamard_stim.checks.slide_queue_check(app, ...

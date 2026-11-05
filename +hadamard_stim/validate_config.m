@@ -50,6 +50,7 @@ for path = ["behavior.face_camera_enabled" "behavior.wheel_encoder_enabled"]
     end
 end
 
+errors = [errors(:); reshape(hadamard_stim.protocol.segmentation_problems(cfg.segmentation), [], 1)];
 if connectivity
     errors = [errors(:); reshape(connectivity_errors(cfg), [], 1)];
 else
@@ -77,6 +78,12 @@ if has_path(cfg, "behavior.face_camera_enabled") && isequal(cfg.behavior.face_ca
 end
 if ~has_path(cfg, "behavior.wheel_encoder_enabled") || ~isequal(cfg.behavior.wheel_encoder_enabled, true)
     warnings(end+1) = "Wheel encoder off: Yitong recorded the treadmill encoder on every acquisition.";
+end
+if connectivity
+    note = hadamard_coverage_note(cfg);
+    if strlength(note) > 0
+        warnings(end+1) = note;
+    end
 end
 if ~connectivity && has_path(cfg, "spontaneous.drift_correction") ...
         && isequal(cfg.spontaneous.drift_correction, false)
@@ -119,13 +126,36 @@ if n_had < 1 || mod(cfg.trials.n_trial, n_had) ~= 0
     errors(end+1) = "trials.n_trial must be a multiple of the number of Hadamard trials " + ...
         "(trials.n_trial - trials.n_sparse).";
 end
-if cfg.matrix.order ~= cfg.segmentation.threshold
-    errors(end+1) = sprintf("segmentation.threshold (%d cells) must equal matrix.order (%d rows).", ...
-        cfg.segmentation.threshold, cfg.matrix.order);
+% The matrix has one row per approved cell; that the approved cells number
+% matrix.order is checked against the cells themselves (the controller's
+% readiness, new_run_state), not against segmentation.threshold: segmenting
+% and exporting the orange mask need no stimulation matrix.
+if ~hadamard_stim.protocol.is_hadamard_order(cfg.matrix.order)
+    errors(end+1) = sprintf(['matrix.order (%g) has no Hadamard matrix: stim_matrix starts from ' ...
+        'MATLAB''s hadamard(n), which needs n, n/12 or n/20 to be a power of 2 (e.g. 256, 320, ' ...
+        '384, 512, 640, 768, 1024, 1280).'], cfg.matrix.order);
 end
 if cfg.trials.first < 1 || cfg.trials.last > cfg.trials.n_trial || cfg.trials.first > cfg.trials.last
     errors(end+1) = sprintf("Trials %d to %d are not within 1 to %d.", ...
         cfg.trials.first, cfg.trials.last, cfg.trials.n_trial);
+end
+end
+
+function note = hadamard_coverage_note(cfg)
+% His 160 Hadamard trials of 8 codes are 1280 codes: the 320-row matrix
+% exactly 4 times. Another order may end partway through a pass.
+note = "";
+codes = cfg.sparse.n_pulses * cfg.sparse.period_frames / cfg.hadamard.frames_per_code;
+n_had = cfg.trials.n_trial - cfg.trials.n_sparse;
+order = cfg.matrix.order;
+if ~(isscalar(order) && order > 0 && codes == round(codes) && n_had > 0)
+    return
+end
+passes = n_had * codes / order;
+if passes ~= round(passes)
+    note = sprintf(['The Hadamard trials play %d codes, %.2f passes through the %d-row matrix: ' ...
+        'the last pass is partial (his 320 rows were covered exactly 4 times).'], ...
+        n_had * codes, passes, order);
 end
 end
 

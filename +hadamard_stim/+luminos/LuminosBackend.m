@@ -308,6 +308,24 @@ classdef LuminosBackend < handle
             end
         end
 
+        function hw = orange_preview_hardware(obj, cfg)
+            % A LuminosRig begun for the orange preview only (preflight
+            % purpose "orange_preview"): the DMD, refused if another owner
+            % has it or it is not open, and its calibration. Needs no
+            % prepared environment, Hadamard calibration scans or blue
+            % calibration. The caller shows the mask (orange_preview) and
+            % releases it: LED off, DMD dark, ownership released.
+            hw = hadamard_stim.luminos.LuminosRig(obj.App, profile=obj.Options.profile, ...
+                acquisition_function=obj.Options.acquisition_function);
+            report = hw.begin(cfg, "orange_preview");
+            if ~report.can_run
+                hw.release();
+                error("hadamard_stim:HardwareNotReady", ...
+                    "The orange preview cannot use the rig:\n  %s", ...
+                    strjoin(report.failures, newline + "  "));
+            end
+        end
+
         function record = record_calibration_scans(obj, cfg, acquisitions)
             % Each folder gets a hadamard_calibration_scan.json (settings,
             % camera area, DMD, time), and the folders become the

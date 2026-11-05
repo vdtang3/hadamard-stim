@@ -1318,6 +1318,101 @@ Hadamard reference scan, which stays as it was.
   cells), approved and exported on the fake Firefly, unprepared. No real
   HiLo Snap exists yet (20261020's HiLo run failed before its Snap).
 
+## 2026-11-04: many cells; targeting without Prepare; commissioning out of readiness
+
+Asked for (Vincent), for animal experiments the next day: segmentation for
+far more than his 320 cells, Snap -> Segment -> Approve -> Preview/Export
+without preparing the rig, and a routine readiness without one-time
+commissioning.
+
+**What limited the cell count was segmentation's pool, not 320.**
+`static_image_seg_v5` keeps `thres` cells (320), but its candidates are the
+top `nROILim = 1000` watershed regions by peak-minus-local-median contrast
+(strictly above the 1000th, so at most 999) that are larger than 10 px. It
+needed `thres + max(n_exclude, 99)` candidates (the 99 for the min_val
+curve) or refused. There is no intensity threshold anywhere: candidates are
+a ranking, so the meaningful sensitivity setting is the size of that pool.
+The filter is `fspecial('gaussian', 7, 7)` cut to its central disk and made
+zero-mean (gSiz = gSig = 7).
+
+**Changed.** His constants are options with his values as defaults
+(`segmentation.candidate_pool` 1000, `min_area_px` 10, `filter_size_px` 7,
+`select_all` false); the parity tests (his image, the synthetic image,
+min_val) are unchanged. Fewer candidates than `thres` keeps them all, and
+`info` reports regions, ranked, candidates, available, requested and
+selected; min_val is NaN where it would need candidates that do not exist.
+Fewer regions than the pool ranks them all. A candidate must have positive
+contrast: where his code ran the pool's cutoff was positive, so nothing of
+his changes, and a featureless image still says "No cells detected" instead
+of returning its 4 border regions. His per-candidate pass over the image to
+build the label matrix is now a lookup (same labels): it would be
+O(candidates x pixels), too slow for large pools. On his reference:
+983 candidates at 1000, 1755 at 2000, 2806 at 4000; a 3200 x 3200 Snap
+takes 26 s.
+
+**Modalities.** Both rankings are differences of intensities on a zero-mean
+filter: a gain changes no cell; an offset changes only regions within the
+filter's width of the border (3 of 640 for +500), through the filter's zero
+padding. So Hadamard, HiLo and camera Snaps share one pipeline and his
+defaults; no normalisation was added. What does change the cells is noise:
+his image at a quarter of the contrast with added noise keeps 145 of 320
+cells within 3 px. A noisy reference is better improved at acquisition
+(more scan repeats, or averaging) than by a preprocessing step; an optional
+denoise was not added without evidence.
+
+**The run's limit is the matrix.** `stim_matrix(order)` starts from
+MATLAB's `hadamard(order)`, which exists only when order, order/12 or
+order/20 is a power of 2 (320 = 20 x 16), and `new_run_state` needs one
+row per approved cell. Nothing else in the trial loop depends on N: a
+sparse or Hadamard trial is 30 or 8 DMD pictures whatever the count, masks
+are canvas-sized, and `picked` and `had_mat` are N x 640 and N x N. So
+`validate_config` now checks the order (`is_hadamard_order`) and the
+`segmentation.threshold == matrix.order` error is gone: the controller's
+readiness compares the approved cells with `matrix.order` instead
+(`cells_matrix`, a blocker for a connectivity run only), so segmenting and
+exporting any count are not "invalid configurations". Another order also
+changes how often the matrix is covered: his 160 Hadamard trials of 8
+codes cover 320 rows exactly 4 times; other orders get a note when the
+last pass is partial (1024: 1.25 passes). A larger N is a protocol change
+(recorded as deviations), not made here.
+
+**Prepare is not destructive.** It cleared proposed cells and returned to
+CONFIGURING, and was legal only before approval. Now it is legal in any
+setup state and discards only what the new environment invalidates: cells
+drawn with another DMD calibration (`geometry.identity` differs), and a
+z-reference reconstructed with other Hadamard calibration scans
+(`scorr_sha256`); `SetupNotice` says what went and why. Rig settings, new
+calibration scans and a blue calibration no longer discard a proposal
+(none of them moves the DMD calibration).
+
+**Targeting without Prepare.** The orange preview with a backend now
+always claims only what it uses (`LuminosBackend.orange_preview_hardware`:
+a LuminosRig begun with preflight purpose `orange_preview`, which checks
+the DMD board, ownership, canvas and polarity and its calibration, and
+nothing a run needs), so an unrelated run blocker cannot refuse it; it is
+released on stop, abort (now legal while previewing) and error. It refuses
+(`GeometryChanged`) when the active DMD calibration is not the one the
+cells were drawn with, so the preview shows the exported mask in the same
+place. `getState().stages` gives reference / targeting / acquisition
+readiness.
+
+**Changing segmentation settings discards cells explicitly.** Proposed and
+approved cells and their masks were drawn with the old settings; keeping
+them under new settings would be silently wrong, and keeping the old
+settings visible while showing new numbers would be confusing. The
+reference image and any z-reference are kept (approving again returns to
+READY). The tab asks before sending a change that discards cells.
+
+**Commissioning left readiness.** The slide queue record was the last
+one-time check that warned (never run, failed, or stale): every run
+without it had to acknowledge it. It is now a note with the same text
+(history, kept in every recipe), as queue support already was; the checks
+and their tab actions remain. Remaining routine checks are current
+conditions: camera mode and depth, calibrations that fit, live DMD board,
+queue support and ownership, DAQ conflicts, area, data folder. Tests that
+used the slide warning to exercise the override now use a settings
+deviation.
+
 ## Parity issues (behaviour that may be a bug; reproduced, not fixed)
 
 - **P1. Reference-image orientation changed after the experiments.** `hadamard_ref.m` gained a transpose on 2026-02-10, after his 2025 data, alongside a Kinetix MEX change. In the newest snapshot, segmentation would run on the transposed image while drift correction compares untransposed scans with the untransposed `hadamard_ref`. The fixtures follow his 2025-03-08 session, which is the untransposed behaviour he actually ran. In Luminos the reference image, scans and DMD calibration must all share Luminos's camera orientation. **Confirmed 2026-10-13: the port follows the untransposed 2025 behaviour.** The transposed `hadamard_ref.m` stays frozen only as evidence.

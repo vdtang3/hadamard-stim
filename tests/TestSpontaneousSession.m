@@ -249,15 +249,16 @@ classdef TestSpontaneousSession < matlab.unittest.TestCase
             r = hadamard_stim.apply_controller_action(c, "acquire_z_reference", struct(), c.Revision);
             testCase.verifyTrue(r.ok, r.message);
             testCase.verifyTrue(c.legalActions().start_run);
-            % The DMD checks a mode uses; a missing slide test is a warning,
-            % not a refusal, and a spontaneous session uses neither.
+            % The DMD checks a mode uses; a missing slide test is a note
+            % (commissioning history, 2026-11-04), and a spontaneous session
+            % uses neither.
             context = struct("hardware_validation", struct());
             gate = hadamard_stim.metadata.hardware_gate(context, "spontaneous");
             testCase.verifyTrue(gate.all_passed);
             testCase.verifyEqual(string({gate.items.status}), ["not_needed" "not_needed"]);
             gate = hadamard_stim.metadata.hardware_gate(context, "connectivity");
             testCase.verifyEqual(gate.missing, "slide_queue");
-            testCase.verifyEqual(string({gate.items.status}), ["info" "warning"]);
+            testCase.verifyEqual(string({gate.items.status}), ["info" "info"]);
         end
 
         function aFullLengthBlockThroughTheAdapterHoldsNoSamples(testCase)

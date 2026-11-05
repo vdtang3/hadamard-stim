@@ -55,15 +55,15 @@ classdef TestLuminosBackend < matlab.unittest.TestCase
             end
             testCase.verifyFalse(any(ismember(["firefly_driver" "firefly_trigger_edge"], ids)));
             % Another owner is a hardware conflict (blocker); commissioning
-            % checks recorded as failed are evidence, not a refusal: a failed
-            % slide test is a warning, a failed queue-support record history
-            % (the live driver answers).
+            % checks recorded as failed are history (2026-11-04): notes that
+            % say so, neither a refusal nor a warning to acknowledge.
             blocked = checks([checks.status] == "blocker");
             testCase.verifyEqual(string({blocked.id}), "dmd_ownership");
-            warned = checks([checks.status] == "warning");
-            testCase.verifyEqual(string({warned.id}), "firefly_slide_queue");
+            testCase.verifyEmpty(checks([checks.status] == "warning"));
+            slide = checks(ids == "firefly_slide_queue");
+            testCase.verifyEqual(slide.status, "info");
+            testCase.verifySubstring(slide.message, "FAILED");
             testCase.verifyEqual(checks(ids == "firefly_queue_support").status, "info");
-            testCase.verifySubstring(warned(1).message, "FAILED");
             owner = checks(ids == "dmd_ownership");
             testCase.verifySubstring(owner.message, "owned by ""adaptive_optopatch""");
             testCase.verifyFalse(owner.overrideable);
@@ -248,29 +248,19 @@ classdef TestLuminosBackend < matlab.unittest.TestCase
             testCase.verifyEqual(r.state.lifecycle, "COMPLETED");
         end
 
-        function failedFireflyChecksAreAcknowledgedOnceThenRecorded(testCase)
-            % Checks recorded as failed: the tab shows them as warnings, Run
-            % refuses until they are acknowledged together, touching
-            % nothing, and the recipe records the override.
-            [c, app, cfg] = tab_session(testCase.Folder, validated=false);
+        function failedFireflyChecksAreRecordedNotAsked(testCase)
+            % Checks recorded as failed are commissioning history
+            % (2026-11-04): the run starts without an acknowledgement and
+            % the recipe keeps the records as they were.
+            [c, ~, cfg] = tab_session(testCase.Folder, validated=false);
             cfg.trials.last = 1;
             testCase.ready(c, cfg);
-            n = numel(app.Log);
             r = hadamard_stim.apply_controller_action(c, "start_run", struct(), c.Revision);
-            testCase.verifyEqual(r.identifier, "hadamard_stim:WarningsNotAcknowledged");
-            testCase.verifyEqual(numel(app.Log), n);
-            testCase.verifyEqual(r.state.environment.hardware_gate.missing, "slide_queue");
-            readiness = r.state.readiness;
-            testCase.verifyTrue(readiness.can_run);
-            ids = string({readiness.warnings.id});
-            testCase.verifyEqual(ids, "firefly_slide_queue");
-            r = hadamard_stim.apply_controller_action(c, "start_run", ...
-                struct("acknowledged_warnings", ids), c.Revision);
             testCase.assertTrue(r.ok, r.message);
+            testCase.verifyEqual(r.state.environment.hardware_gate.missing, "slide_queue");
             recipe = jsondecode(fileread(fullfile(c.RunFolder, "run_recipe.json")));
-            testCase.verifyTrue(recipe.start_override.operator_override);
-            testCase.verifyEqual(string({recipe.start_override.warnings.id}), ids);
-            testCase.verifySubstring(recipe.start_override.warnings(1).consequence, "diagnostic data");
+            testCase.verifyEmpty(recipe.start_override);
+            testCase.verifyFalse(recipe.hardware_validation.slide_queue.passed);
         end
 
         function aConflictingDaqOutputBlocksTheRun(testCase)

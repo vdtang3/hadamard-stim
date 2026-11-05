@@ -19,6 +19,8 @@ classdef HadamardStimController < handle
     %                      Luminos Snap as it (no rig preparation needed)
     %     CELLS_PROPOSED   segmentation run on the reference image; look at
     %                      the cells and min_val, then approve or re-run
+    %                      (with other segmentation settings, on the same
+    %                      reference image)
     %     CELLS_APPROVED   the canonical geometry is fixed from here on
     %     READY            reference z-stack acquired (or, for a spontaneous
     %                      session without drift correction, not needed);
@@ -28,6 +30,20 @@ classdef HadamardStimController < handle
     %     STOPPED / COMPLETED / FAILED / ABORTED
     %   A stopped, failed or aborted run resumes from its folder's checkpoint.
     %   The rig is released before any of those last four is reported.
+    %
+    %   Three levels of readiness (getState().stages):
+    %     reference    a reference image that can be segmented (needs the
+    %                  DMD calibration only: a backend reads it unprepared)
+    %     targeting    approved cells: the orange preview and the mask
+    %                  export work without preparing the rig
+    %     acquisition  a run of this configuration can start (Prepare rig,
+    %                  z-reference, readiness without blockers)
+    %   Preparing the rig never discards the reference image, proposed or
+    %   approved cells: only a DMD calibration other than the one they were
+    %   drawn with does, and a changed Hadamard calibration drops the
+    %   z-reference; SetupNotice says what was discarded and why. Changing
+    %   a segmentation setting discards proposed and approved cells (the
+    %   reference image is kept) and says so the same way.
     %
     %   Readiness (getState().readiness, metadata.readiness_report): every
     %   check is a pass, info, warning or blocker. Blockers (impossible,
@@ -88,6 +104,9 @@ classdef HadamardStimController < handle
         % The last orange mask export (exportOrangeMask): files, hash, when;
         % [] before one.
         OrangeMaskExport = []
+        % What setup last discarded and why (a changed segmentation
+        % setting, a re-prepared rig on another calibration); "" if nothing.
+        SetupNotice (1, 1) string = ""
     end
 
     properties
@@ -103,6 +122,9 @@ classdef HadamardStimController < handle
     properties (Access = private)
         HardwareHeld (1, 1) logical = false
         CalibrationHw = []     % the rig a calibration scan is using, for abort
+        % The rig an orange preview holds when the rig is not prepared
+        % (Backend.orange_preview_hardware); [] otherwise.
+        PreviewHw = []
     end
 
     methods
@@ -127,9 +149,24 @@ classdef HadamardStimController < handle
         % ---- Setup ------------------------------------------------------
 
         function setConfig(obj, cfg)
+            % A changed segmentation setting discards proposed and approved
+            % cells (they, and their masks, came from the old settings);
+            % the reference image and the z-reference are kept, and
+            % SetupNotice says what was discarded.
             obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED" "CELLS_APPROVED" "READY"]);
+            resegment = ~isequaln(obj.Config.segmentation, cfg.segmentation) ...
+                && (~isempty(obj.Proposal) || ~isempty(obj.Cells));
             obj.Config = cfg;
             changed = onCleanup(@() obj.bump());
+            if resegment
+                what = "the proposed cells";
+                if ~isempty(obj.Cells)
+                    what = sprintf("the %d approved cells and their masks", size(obj.Cells.cell_coord, 1));
+                end
+                obj.discardCells("Segmentation settings changed: " + what + ...
+                    " were discarded. The reference image is kept: Segment again.");
+                return
+            end
             obj.followOrangeStart();
         end
 
@@ -144,12 +181,12 @@ classdef HadamardStimController < handle
             obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED"]);
             obj.stopOrangePreview();
             obj.Backend.set_settings(changes);
-            % The environment was built with the old settings.
+            % The environment was built with the old settings. Proposed
+            % cells are kept: rig settings do not move the DMD calibration
+            % they were drawn with.
             obj.Env = struct();
             obj.Prepared = [];
             obj.Preflight = [];
-            obj.Proposal = [];
-            obj.LifecycleState = "CONFIGURING";
             obj.bump();
         end
 
@@ -166,9 +203,13 @@ classdef HadamardStimController < handle
 
         function prepareRig(obj)
             % Build the environment from the backend: calibrations, geometry
-            % and the LuminosRig a run will use.
+            % and the LuminosRig a run will use. Needed for Hadamard
+            % acquisitions only (reference scan, z-reference, runs), not
+            % for segmenting, approving, the orange preview or the export.
+            % Safe to repeat, and keeps the reference image and the cells:
+            % see prepareBody for what a changed calibration discards.
             obj.requireBackend();
-            obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED"]);
+            obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED" "CELLS_APPROVED" "READY"]);
             obj.stopOrangePreview();
             obj.during("preparing", @() obj.prepareBody());
         end
@@ -177,7 +218,7 @@ classdef HadamardStimController < handle
             % His Hadamard calibration scans, on the slide now in place,
             % before the rig is prepared (preparing needs them). The new
             % scans become the backend's calibration folders, so a rig
-            % prepared with the old ones is dropped, with any proposal.
+            % prepared with the old ones is dropped; proposed cells are kept.
             obj.requireBackend();
             obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED"]);
             obj.stopOrangePreview();
@@ -202,7 +243,7 @@ classdef HadamardStimController < handle
         function calibrateBlueLed(obj)
             % The rig's slide calibration of the blue light, with the
             % uniform slide in place. The calibration changes, so a rig
-            % prepared with the old one is dropped, with any proposal.
+            % prepared with the old one is dropped; proposed cells are kept.
             obj.requireBackend();
             obj.assertIdle(["CONFIGURING" "CELLS_PROPOSED"]);
             obj.stopOrangePreview();
@@ -256,7 +297,13 @@ classdef HadamardStimController < handle
             obj.Cells = obj.Proposal;
             obj.CellsGeometry = obj.ProposalGeometry;
             obj.LifecycleState = "CELLS_APPROVED";
-            if ~needs_z_stack(obj.Config)
+            obj.SetupNotice = "";
+            if needs_z_stack(obj.Config) && obj.hasZStackFor(obj.Config)
+                % Re-approved after a change of segmentation settings: the
+                % z-reference of this field of view is still valid.
+                obj.Reference.had_ref = obj.ReferenceImage;
+                obj.LifecycleState = "READY";
+            elseif ~needs_z_stack(obj.Config)
                 % A spontaneous session without drift correction compares
                 % against nothing: it is ready once the cells are fixed.
                 obj.Reference = struct("z_all", [], "z_focus", NaN, ...
@@ -298,6 +345,7 @@ classdef HadamardStimController < handle
             obj.LastResume = [];
             obj.RunStarted = NaT;
             obj.RunEnded = NaT;
+            obj.SetupNotice = "";
             obj.LifecycleState = "CONFIGURING";
             obj.bump();
         end
@@ -315,25 +363,47 @@ classdef HadamardStimController < handle
             % stopOrangePreview turns the LED off, blanks the DMD and
             % releases it. Changing orange_start_v while it is on moves the
             % LED (setConfig).
-            obj.requireBackend();
+            %
+            % The rig need not be prepared: with a backend, the preview
+            % claims only what it uses (Backend.orange_preview_hardware:
+            % the DMD, refused if another owner has it, and the orange LED),
+            % so nothing a run needs can refuse it, and releases it on stop,
+            % error or abort. Without a backend it uses the environment's
+            % rig. Either way the active DMD calibration must be the one
+            % the cells were drawn with, so the mask shown is the mask
+            % exported, in the same place.
             obj.assertIdle(["CELLS_APPROVED" "READY"]);
-            obj.requireEnvironment();
             if isempty(obj.Cells) || ~isfield(obj.Cells, "illum_mask")
                 error("hadamard_stim:NoCells", "Approve the cells first: the preview shows their illumination mask.");
             end
-            if ~ismethod(obj.Env.hw, "orange_preview")
-                error("hadamard_stim:NoOrangePreview", "This rig cannot show an orange preview.");
+            if isempty(obj.Backend)
+                obj.requireEnvironment();
             end
             obj.stopOrangePreview();
-            % Held on purpose: the session outlives this call, and
-            % stopOrangePreview releases it.
-            obj.holdHardware();
+            obj.requireDrawnGeometry();
             volts = obj.orangeStart();
-            try
-                obj.Env.hw.orange_preview(obj.Cells.illum_mask, volts);
-            catch err
-                obj.releaseHardware();
-                rethrow(err);
+            if isempty(obj.Backend)
+                if ~ismethod(obj.Env.hw, "orange_preview")
+                    error("hadamard_stim:NoOrangePreview", "This rig cannot show an orange preview.");
+                end
+                % Held on purpose: the session outlives this call, and
+                % stopOrangePreview releases it.
+                obj.holdHardware();
+                try
+                    obj.Env.hw.orange_preview(obj.Cells.illum_mask, volts);
+                catch err
+                    obj.releaseHardware();
+                    rethrow(err);
+                end
+            else
+                hw = obj.Backend.orange_preview_hardware(obj.Config);
+                try
+                    hw.orange_preview(obj.Cells.illum_mask, volts);
+                catch err
+                    obj.recordCleanup(hw.release());
+                    rethrow(err);
+                end
+                obj.PreviewHw = hw;
             end
             obj.OrangePreview = struct("started_utc", utc_text(datetime("now", "TimeZone", "UTC")), ...
                 "orange_v", volts, "n_cells", size(obj.Cells.cell_coord, 1), ...
@@ -379,12 +449,23 @@ classdef HadamardStimController < handle
         end
 
         function stopOrangePreview(obj)
-            % Safe to call at any time, any number of times.
+            % Safe to call at any time, any number of times. LED off, DMD
+            % dark, ownership released (LuminosRig.release).
             if isempty(obj.OrangePreview)
                 return
             end
             obj.OrangePreview = [];
-            obj.releaseHardware();
+            if ~isempty(obj.PreviewHw)
+                hw = obj.PreviewHw;
+                obj.PreviewHw = [];
+                try
+                    obj.recordCleanup(hw.release());
+                catch err
+                    obj.recordCleanup(struct("steps", strings(0, 1), "errors", string(err.message), "ok", false));
+                end
+            else
+                obj.releaseHardware();
+            end
             obj.bump();
             obj.notifyStatus();
         end
@@ -550,12 +631,16 @@ classdef HadamardStimController < handle
             state.proposal = [];
             if ~isempty(obj.Proposal)
                 state.proposal = struct("n_cells", size(obj.Proposal.cell_coord, 1), ...
-                    "cell_coord", obj.Proposal.cell_coord, "min_val", obj.Proposal.min_val);
+                    "cell_coord", obj.Proposal.cell_coord, "min_val", obj.Proposal.min_val, ...
+                    "segmentation", field_or(obj.Proposal, "segmentation", []));
             end
             state.n_approved_cells = 0;
+            state.approved_segmentation = [];
             if ~isempty(obj.Cells)
                 state.n_approved_cells = size(obj.Cells.cell_coord, 1);
+                state.approved_segmentation = field_or(obj.Cells, "segmentation", []);
             end
+            state.setup_notice = obj.SetupNotice;
             state.run_folder = obj.RunFolder;
             state.recipe_hash = obj.RecipeHash;
             state.progress = [];
@@ -618,6 +703,7 @@ classdef HadamardStimController < handle
             state.preflight = obj.Preflight;
             state.readiness = obj.readiness(obj.Config);
             state.calibration = obj.calibrationStatus();
+            state.stages = obj.stages(state.readiness);
         end
 
         function legal = legalActions(obj)
@@ -631,7 +717,7 @@ classdef HadamardStimController < handle
             legal.update_config = editable;
             legal.set_rig_settings = backend && early;
             legal.run_preflight = backend && idle;
-            legal.prepare_rig = backend && early;
+            legal.prepare_rig = backend && editable;
             legal.acquire_calibration_scans = backend && early;
             legal.calibrate_blue_led = backend && early;
             legal.run_commissioning_check = backend && early;
@@ -646,15 +732,43 @@ classdef HadamardStimController < handle
             legal.start_run = idle && s == "READY" && obj.hasZStackFor(obj.Config);
             legal.resume_run = idle && env && ismember(s, ["CONFIGURING" "READY" "STOPPED" "FAILED" "ABORTED"]);
             legal.stop_after_current = s == "RUNNING" && ~obj.StopRequested;
-            legal.abort = ismember(obj.Activity, ["running" "z_reference" "scanning" "calibrating"]) && ~obj.AbortRequested;
-            legal.new_session = idle && ~ismember(s, ["CONFIGURING" "RUNNING"]);
             previewing = ~isempty(obj.OrangePreview);
-            legal.start_orange_preview = backend && env && idle && ~previewing ...
+            % Abort also turns a preview off (requestAbort).
+            legal.abort = (ismember(obj.Activity, ["running" "z_reference" "scanning" "calibrating"]) ...
+                && ~obj.AbortRequested) || (previewing && obj.Activity == "");
+            legal.new_session = idle && ~ismember(s, ["CONFIGURING" "RUNNING"]);
+            % Not prepared is fine with a backend: the preview claims only
+            % the DMD and the orange LED.
+            legal.start_orange_preview = (backend || env) && idle && ~previewing ...
                 && ismember(s, ["CELLS_APPROVED" "READY"]) && ~isempty(obj.Cells);
             legal.stop_orange_preview = previewing;
             % Files only, so a preview being on does not matter.
             legal.export_orange_mask = obj.Activity == "" && ismember(s, ["CELLS_APPROVED" "READY"]) ...
                 && ~isempty(obj.Cells) && (backend || env);
+        end
+
+        function s = stages(obj, readiness)
+            % Reference, targeting and acquisition readiness: what each
+            % level allows, and the first thing missing for it.
+            geometry = ~isempty(obj.Backend) || obj.hasEnvironment();
+            reference = ~isempty(obj.ReferenceImage) && geometry;
+            targeting = ~isempty(obj.Cells);
+            acquisition = obj.LifecycleState == "READY" && readiness.can_run;
+            s.reference = struct("ready", reference, "message", pick(reference, ...
+                "A reference image to segment.", "No reference image: acquire one, or load a Snap."));
+            s.targeting = struct("ready", targeting, "message", pick(targeting, ...
+                sprintf("%d approved cells: preview and export the orange mask (no Prepare needed).", ...
+                size_or_zero(obj.Cells)), "Segment the reference image and approve the cells."));
+            blockers = strings(1, 0);
+            if ~isempty(readiness.blockers)
+                blockers = string({readiness.blockers.label});
+            end
+            missing = "Not ready: " + strjoin(blockers, "; ") + ".";
+            if isempty(blockers)
+                missing = "Not ready: acquire the z-reference.";
+            end
+            s.acquisition = struct("ready", acquisition, "message", pick(acquisition, ...
+                "This configuration's run can start.", missing));
         end
 
         function tf = hasEnvironment(obj)
@@ -845,20 +959,18 @@ classdef HadamardStimController < handle
             env = struct("hw", hw, "phase_changed", @(phase) obj.onPhase(phase));
             acquisitions = hadamard_stim.protocol.acquire_calibration_scans(obj.Config, env);
             obj.Backend.record_calibration_scans(obj.Config, acquisitions);
+            % The prepared rig used the old scans; cells do not depend on them.
             obj.Env = struct();
             obj.Prepared = [];
             obj.Preflight = [];
-            obj.Proposal = [];
-            obj.LifecycleState = "CONFIGURING";
         end
 
         function blueCalibrationBody(obj)
             obj.Backend.calibrate_blue_led();
+            % The prepared rig used the old calibration; cells do not depend on it.
             obj.Env = struct();
             obj.Prepared = [];
             obj.Preflight = [];
-            obj.Proposal = [];
-            obj.LifecycleState = "CONFIGURING";
         end
 
         function releaseCalibrationHw(obj, hw)
@@ -870,13 +982,48 @@ classdef HadamardStimController < handle
         end
 
         function prepareBody(obj)
+            % Only what the new environment actually invalidates goes:
+            % cells drawn with another DMD calibration, and a z-reference
+            % reconstructed with other Hadamard calibration scans.
+            before = scan_calibration_sha(obj.Env);
             env = obj.Backend.environment(obj.Config);
             obj.Env = env;
             obj.Prepared = struct("utc", utc_text(datetime("now", "TimeZone", "UTC")), ...
                 "m_q", obj.Config.scan.m_q);
-            % Cells proposed with the old geometry are not this rig's.
+            geometry = env.geometry.identity;
+            drawn = obj.ProposalGeometry;
+            if ~isempty(obj.Cells)
+                drawn = obj.CellsGeometry;
+            end
+            if (~isempty(obj.Proposal) || ~isempty(obj.Cells)) && ~isequaln(drawn, geometry)
+                obj.discardCells("The rig was prepared with another DMD calibration than the " + ...
+                    "cells were drawn with, so their masks would land elsewhere: the cells were " + ...
+                    "discarded. The reference image is kept: Segment again.");
+                return
+            end
+            had_z = ~isempty(obj.Reference) && isfield(obj.Reference, "had_z_stack") ...
+                && ~isempty(obj.Reference.had_z_stack);
+            if had_z && strlength(before) > 0 && before ~= scan_calibration_sha(env)
+                obj.Reference = [];
+                if obj.LifecycleState == "READY"
+                    obj.LifecycleState = "CELLS_APPROVED";
+                end
+                obj.SetupNotice = "The rig was prepared with other Hadamard calibration scans: " + ...
+                    "the z-reference (reconstructed with the old ones) was discarded. Cells are kept; " + ...
+                    "acquire the z-reference again.";
+            end
+        end
+
+        function discardCells(obj, notice)
+            % Proposed and approved cells, and what was drawn from them, go;
+            % the reference image and any z-reference stay.
+            obj.stopOrangePreview();
             obj.Proposal = [];
+            obj.ProposalGeometry = [];
+            obj.Cells = [];
+            obj.CellsGeometry = [];
             obj.LifecycleState = "CONFIGURING";
+            obj.SetupNotice = notice;
         end
 
         function referenceBody(obj)
@@ -906,6 +1053,7 @@ classdef HadamardStimController < handle
                 obj.ReferenceImage, geometry);
             obj.ProposalGeometry = geometry.identity;
             obj.LifecycleState = "CELLS_PROPOSED";
+            obj.SetupNotice = "";
         end
 
         function zReferenceBody(obj)
@@ -1034,8 +1182,21 @@ classdef HadamardStimController < handle
                 items(end+1) = item("cells", "Cells approved", "blocker", ...
                     "No approved cells: take the reference image, segment and approve.");
             else
-                items(end+1) = item("cells", "Cells approved", "pass", ...
-                    sprintf("%d cells.", size(obj.Cells.cell_coord, 1)));
+                n = size(obj.Cells.cell_coord, 1);
+                items(end+1) = item("cells", "Cells approved", "pass", sprintf("%d cells.", n));
+                if ~is_spontaneous(cfg) && n ~= cfg.matrix.order
+                    % Only a run needs this: segmenting, the preview and the
+                    % export do not use the stimulation matrix.
+                    items(end+1) = hadamard_stim.metadata.readiness_item("cells_matrix", ...
+                        "Approved cells fit the stimulation matrix", "blocker", group="fov", ...
+                        message=sprintf(['%d cells are approved; the stimulation matrix ' ...
+                        '(matrix.order) has %d rows, one per cell.'], n, cfg.matrix.order), ...
+                        consequence="A connectivity run stimulates cell k with matrix row k, so " + ...
+                        "the counts must match. The orange preview and export are not affected. " + ...
+                        "Set matrix.order to the approved count if the matrix can have it " + ...
+                        "(320, 384, 512, 640, 768, 1024, 1280; a multiple of the codes per " + ...
+                        "trial), or segment for that many cells.");
+                end
             end
             if needs_z_stack(cfg) && obj.ReferenceSource.kind == "snap"
                 items(end+1) = item("reference_kind", "Reference image for drift correction", "blocker", ...
@@ -1105,8 +1266,12 @@ classdef HadamardStimController < handle
             if volts == obj.OrangePreview.orange_v
                 return
             end
+            hw = obj.PreviewHw;
+            if isempty(hw)
+                hw = obj.Env.hw;
+            end
             try
-                obj.Env.hw.set_orange_level(volts);
+                hw.set_orange_level(volts);
                 obj.OrangePreview.orange_v = volts;
             catch err
                 obj.stopOrangePreview();
@@ -1125,9 +1290,31 @@ classdef HadamardStimController < handle
             catch err
                 report = struct("steps", strings(0, 1), "errors", string(err.message), "ok", false);
             end
+            obj.recordCleanup(report);
+        end
+
+        function recordCleanup(obj, report)
             obj.LastCleanup = struct("ok", report.ok, "released_utc", utc_text(datetime("now", "TimeZone", "UTC")), ...
                 "steps", reshape(string(report.steps), [], 1), ...
                 "errors", reshape(string(report.errors), [], 1));
+        end
+
+        function requireDrawnGeometry(obj)
+            % The cells' masks were drawn with CellsGeometry; showing them
+            % under another DMD calibration would put the light elsewhere.
+            if isempty(obj.CellsGeometry)
+                return   % cells from a checkpoint, drawn with the run's geometry
+            end
+            if isempty(obj.Backend)
+                now_ = obj.Env.geometry.identity;
+            else
+                now_ = obj.Backend.geometry().identity;
+            end
+            if ~isequaln(now_, obj.CellsGeometry)
+                error("hadamard_stim:GeometryChanged", ...
+                    ['The active DMD calibration is not the one these cells were drawn with, so their ' ...
+                     'mask would not land on them. Segment and approve again (the reference image is kept).']);
+            end
         end
 
         % ---- Checks -------------------------------------------------------
@@ -1460,6 +1647,31 @@ function s = singular_verb(n)
 s = "";
 if n == 1
     s = "s";
+end
+end
+
+function t = pick(condition, yes, no)
+if condition
+    t = string(yes);
+else
+    t = string(no);
+end
+end
+
+function n = size_or_zero(cells)
+n = 0;
+if ~isempty(cells)
+    n = size(cells.cell_coord, 1);
+end
+end
+
+function sha = scan_calibration_sha(env)
+% The Hadamard calibration a prepared environment reconstructs with ("" if none).
+sha = "";
+if isfield(env, "context") && isfield(env.context, "hardware") ...
+        && isfield(env.context.hardware, "scan_calibration") ...
+        && isfield(env.context.hardware.scan_calibration, "scorr_sha256")
+    sha = string(env.context.hardware.scan_calibration.scorr_sha256);
 end
 end
 

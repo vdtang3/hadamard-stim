@@ -17,8 +17,12 @@ function [image, snap] = read_reference_snap(file)
 %   snap describes it: file, sha256 (of the image), name (camera), type
 %   ("Camera", "HiLo", ...), bin, roi [x0 y0 width height] (unbinned
 %   sensor pixels), image_size, timestamp, transforms (name, matrix in
-%   affinetform2d's A convention, class), and provenance when the Snap
-%   carries one (HiLo Snaps do).
+%   affinetform2d's A convention, class), provenance when the Snap
+%   carries one (HiLo Snaps do), and the camera's stage calibration:
+%   pixel_to_sample_um (2 x 2, microns per image pixel; [] when the camera
+%   was not calibrated) and um_per_px, sqrt(abs(det)) of it (NaN without).
+%   Segmentation's sizes are in image pixels, so um_per_px is what says
+%   how large they are on the sample - which differs between cameras.
 %
 %   Refuses (hadamard_stim:InvalidSnap) a file that is not a Snap, or an
 %   image that is not one finite 2-D frame. Whether the Snap fits the
@@ -92,6 +96,13 @@ snap.transforms = transforms(s);
 snap.provenance = [];
 if has(s, "provenance") && ~isempty(s.provenance)
     snap.provenance = s.provenance;
+end
+snap.pixel_to_sample_um = [];
+snap.um_per_px = NaN;
+if has(s, "pixel_to_sample_um") && isnumeric(s.pixel_to_sample_um) ...
+        && isequal(size(s.pixel_to_sample_um), [2 2]) && all(isfinite(s.pixel_to_sample_um(:)))
+    snap.pixel_to_sample_um = double(s.pixel_to_sample_um);
+    snap.um_per_px = sqrt(abs(det(snap.pixel_to_sample_um)));
 end
 end
 

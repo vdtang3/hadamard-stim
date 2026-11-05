@@ -23,7 +23,7 @@ steps = [
     s("installation", "DMD", "Probe the ALP driver and MEX: a driver opens the board and reports the 1024 x 768 DMD, its DLL, version and serial", "MATLAB, Luminos closed: hadamard_stim.checks.driver_check()")
     s("occasional", "DMD", "Sequence queue support on the live driver", "Tab: Rig / commissioning, Sequence queue, Run check")
     s("occasional", "DMD", "Queue playback on the uniform slide (rising edge)", "Tab: Rig / commissioning, Queue playback on slide, Run on slide")
-    s("occasional", "Calibration", "DMD geometry for the Kinetix at the acquisition camera area", "Luminos DMD tab")
+    s("occasional", "Calibration", "DMD geometry for the imaging camera at the acquisition camera area", "Luminos DMD tab")
     s("occasional", "Calibration", "Hadamard calibration scans on the uniform slide", "Tab: Take new scans (or reuse an earlier set)")
     s("occasional", "Calibration", "Blue LED slide calibration, and blue_threshold", "Tab: Calibrate blue LED; rig settings")
     s("bring_up", "Settings", "Name the hardware validation file", "Tab: rig settings")

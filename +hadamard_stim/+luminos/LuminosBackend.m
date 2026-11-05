@@ -23,6 +23,8 @@ classdef LuminosBackend < handle
     %                               Luminos's data folder for the day
     %     wheel_encoder_lines       the encoder's A and B digital lines;
     %                               empty means his wiring (firefly_profile)
+    %     camera_name               the imaging camera's Luminos name; empty
+    %                               means the Kinetix (firefly_profile)
     %
     %   Options for tests: calibration_movies, acquisition_function,
     %   blue_calibration_function, slide_queue_frame_means, profile,
@@ -54,6 +56,13 @@ classdef LuminosBackend < handle
                 % Luminos's DMD code differs; tests substitute a fake.
                 options.dmd_code_changed_function = @hadamard_stim.luminos.dmd_code_changed
                 options.profile struct = hadamard_stim.luminos.firefly_profile()
+                % The imaging camera's Luminos name when it is not the
+                % Kinetix (the Hadamard_Stim device's camera_name): the
+                % profile for that camera replaces the default one.
+                options.camera_name (1, 1) string = ""
+            end
+            if strlength(options.camera_name) > 0
+                options.profile = hadamard_stim.luminos.firefly_profile(options.camera_name);
             end
             obj.App = app;
             obj.Options = options;

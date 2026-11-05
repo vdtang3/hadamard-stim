@@ -1684,7 +1684,10 @@ end
 snap = source.snap;
 s = struct("type", snap.type, "camera", snap.name, "roi", snap.roi, "bin", snap.bin, ...
     "timestamp", snap.timestamp, "sha256", snap.sha256, ...
-    "transform_recorded", source.fit.transform_recorded);
+    "transform_recorded", source.fit.transform_recorded, "um_per_px", []);
+if isfield(snap, "um_per_px") && isfinite(snap.um_per_px)
+    s.um_per_px = snap.um_per_px;
+end
 end
 
 function v = field_or(s, name, default)

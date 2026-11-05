@@ -90,6 +90,28 @@ classdef TestCameraFormat < matlab.unittest.TestCase
             testCase.verifyEqual(jsondecode_format(f), f);
         end
 
+        function anotherCamerasUnlistedModesHaveNoOffset(testCase)
+            % His 100 is his Kinetix's 16-bit black level. A Libra's Mono12
+            % or Mono16 is stored in 16 bits too, but its level is
+            % unmeasured: no offset, so preflight refuses its scans rather
+            % than subtract a guess. Snaps never use the offset.
+            libra = hadamard_stim.testing.FakeLuminosCamera("Libra 5514 Pro");
+            libra.bit_mode_id = "Standard|Mono12|unpacked";
+            libra.bit_mode_label = "12-bit Standard";
+            libra.pixel_bit_depth = 12;
+            f = hadamard_stim.luminos.camera_format(libra);
+            testCase.verifyTrue(f.supported);
+            testCase.verifyEqual(f.storage_bits, 16);
+            testCase.verifyFalse(f.offset_known);
+            testCase.verifyTrue(isnan(f.offset));
+            % The Kinetix, and a bare depth, keep his 100.
+            kinetix = hadamard_stim.testing.FakeLuminosCamera("Teledyne Kinetix");
+            kinetix.bit_mode_id = "Standard|Mono12|unpacked";
+            kinetix.bit_mode_label = "12-bit Standard";
+            testCase.verifyEqual(hadamard_stim.luminos.camera_format(kinetix).offset, 100);
+            testCase.verifyEqual(hadamard_stim.luminos.camera_format(16).offset, 100);
+        end
+
         function eightBitFramesAreReadAsUint8(testCase)
             mov = uint8(randi([0 255], 5, 7, 9));
             file = write_movie(testCase.Folder, mov);

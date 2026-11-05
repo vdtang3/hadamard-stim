@@ -199,6 +199,62 @@ classdef TestReferenceSnap < matlab.unittest.TestCase
                 "Without drift correction the reference image is only where the cells came from.");
         end
 
+        function aLibraSnapTargetsThroughTheLibrasCalibration(testCase)
+            % Firefly with the Tucsen Libra: the tab's camera_name names it.
+            % Its Snaps are listed, loaded through its own DMD calibration,
+            % segmented, approved and exported, with no prepared rig; a
+            % Kinetix Snap is refused, and so is a Libra Snap on a tab
+            % still set for the Kinetix.
+            [c, app] = testCase.session("libra", camera_name="Libra 5514 Pro");
+            libra = hadamard_stim.testing.FakeLuminosCamera("Libra 5514 Pro");
+            libra.type = 4;
+            libra.cam_id = "21626005";
+            libra.App = app;
+            app.Devices{end + 1} = libra;
+            app.getDevice("ALP_DMD").CalibratedCamera = "Libra 5514 Pro";
+            image = testCase.image();
+            file = testCase.writeSnap(image, name="Libra 5514 Pro", ...
+                pixel_to_sample_um=[0 -4.1; 4.1 0]);
+
+            today = fullfile(testCase.Folder, "libra_data", "20261105");
+            mkdir(fullfile(today, "Snaps"));
+            app.datafolder = today;
+            listed = [fullfile(today, "Snaps", "090000_cam-Libra5514Pro.mat")
+                fullfile(today, "Snaps", "080000_cam-TeledyneKinetix.mat")];
+            for k = 1:numel(listed)
+                fclose(fopen(listed(k), "w"));
+            end
+            view = hadamard_stim.controller_view(c, "reference_snaps");
+            testCase.verifyTrue(view.ok, view.message);
+            testCase.verifyEqual([view.data.file], listed(1), "Only the Libra's Snaps are offered.");
+            r = act(c, "load_reference_snap", struct("file", file));
+            testCase.verifyEqual(r.state.reference.snap.camera, "Libra 5514 Pro");
+            testCase.verifyEqual(r.state.reference.snap.um_per_px, 4.1, "AbsTol", 1e-12);
+            testCase.verifyEqual(c.ReferenceImage, image);
+            act(c, "propose_cells");
+            act(c, "approve_cells");
+            testCase.verifyGreaterThan(size(c.Cells.cell_coord, 1), 0);
+            testCase.verifyEqual(c.CellsGeometry.camera, "Libra 5514 Pro");
+            stem = fullfile(testCase.Folder, "libra_orange_mask");
+            act(c, "export_orange_mask", struct("file_stem", stem));
+            saved = load(stem + ".mat");
+            testCase.verifyEqual(saved.mask, c.Cells.illum_mask);
+            testCase.verifyEqual(saved.info.dmd_calibration.camera, "Libra 5514 Pro");
+
+            kinetixSnap = testCase.writeSnap(image);
+            r = hadamard_stim.apply_controller_action(c, "load_reference_snap", ...
+                struct("file", kinetixSnap), c.Revision);
+            testCase.verifyFalse(r.ok, "A Kinetix Snap is not in the Libra's calibration.");
+
+            % The default profile is the Kinetix: a Libra Snap is refused.
+            [k, kapp] = testCase.session("kinetix_tab");
+            kapp.getDevice("ALP_DMD").CalibratedCamera = "Teledyne Kinetix";
+            r = hadamard_stim.apply_controller_action(k, "load_reference_snap", ...
+                struct("file", file), k.Revision);
+            testCase.verifyFalse(r.ok, "A Libra Snap is not in the Kinetix's calibration.");
+            testCase.verifyEmpty(k.ReferenceImage);
+        end
+
         function theCameraSnapsAreListedNewestFirst(testCase)
             [c, app] = testCase.session("listing");
             today = fullfile(testCase.Folder, "data", "20261103");
@@ -264,9 +320,11 @@ classdef TestReferenceSnap < matlab.unittest.TestCase
                 name (1, 1) string
                 options.calibration_movies cell = {[]}
                 options.validated (1, 1) logical = true
+                options.camera_name (1, 1) string = ""
             end
             [c, app, cfg] = tab_session(fullfile(testCase.Folder, name), ...
-                calibration_movies=options.calibration_movies, validated=options.validated);
+                calibration_movies=options.calibration_movies, validated=options.validated, ...
+                camera_name=options.camera_name);
             act(c, "set_config", struct("config", cfg));
         end
 
@@ -287,6 +345,7 @@ classdef TestReferenceSnap < matlab.unittest.TestCase
                 options.roi (1, 4) double = [0 0 448 328]
                 options.bin (1, 1) double = 1
                 options.transform = eye(3)
+                options.pixel_to_sample_um = []
             end
             snap = struct();
             snap.img = image;
@@ -303,7 +362,11 @@ classdef TestReferenceSnap < matlab.unittest.TestCase
                     "tform", {affinetform2d(options.transform), affinetform2d([2 0 0; 0 2 0; 0 0 1])});
             end
             snap.provenance = struct("source", "HiLo", "mode", "current_plane");
-            file = fullfile(testCase.Folder, string(java.util.UUID.randomUUID()) + "_hilo_cam-TeledyneKinetix.mat");
+            if ~isempty(options.pixel_to_sample_um)
+                snap.pixel_to_sample_um = options.pixel_to_sample_um;
+            end
+            file = fullfile(testCase.Folder, string(java.util.UUID.randomUUID()) + "_hilo_cam-" ...
+                + regexprep(options.name, "[^A-Za-z0-9]", "") + ".mat");
             save(file, "snap", "-v7.3");
         end
 

@@ -1413,6 +1413,41 @@ queue support and ownership, DAQ conflicts, area, data folder. Tests that
 used the slide warning to exercise the override now use a settings
 deviation.
 
+## 2026-11-04: the imaging camera is a setting (Firefly's Tucsen Libra)
+
+Firefly is trying a Tucsen Libra 5514 Pro in place of the Kinetix. The goal
+for now is targeting only: Libra Snap -> segment -> approve -> orange mask.
+`firefly_profile(camera_name)` and `LuminosBackend(camera_name=...)` (from the
+Luminos device's `camera_name`) make the imaging camera a setting; the
+default stays the Kinetix, so nothing changes without it. Everything already
+keyed by the profile camera follows: Snap listing (`*_cam-Libra5514Pro.mat`),
+the Snap check, the active DMD calibration and the recipe's text.
+
+Dark offsets: his 100 for an unlisted 16-bit mode is his Kinetix's black
+level. It now applies to the Kinetix only (`unlisted_16bit_offset_camera`);
+another camera's unlisted modes have no offset, so preflight refuses its
+scans until its dark frames are measured and added to `camera_offsets`.
+Snaps and segmentation never use the offset.
+
+Pixel sizes: segmentation (`filter_size_px` 7, `min_area_px` 10) and the spot
+sizes (orange 5, blue 3) are in reference-image pixels, chosen at his Kinetix
+sampling. Nothing is rescaled automatically: the Libra's sample-plane scale is
+not known until it is measured on the rig. Snaps now report the camera's
+stage calibration (`pixel_to_sample_um`, `um_per_px`), shown in the tab, so
+sizes can be set from a measured scale. A synthetic check at 2048 x 2048
+(2,500 blobs, pool 4,000) selected 2,000 cells in about 10 s at either filter
+size, so the segmenter has no frame-size limit. Scaling the image by a gain
+leaves the selection unchanged. Adding an offset swapped 4-6 of 1,500 cells,
+and none of them were within 15 px of the border, so the 2026-11-04 entry's
+"except near the border" is not the whole story. Minor; not investigated.
+
+Not ported: the native Hadamard reference scan. Its blanking is the
+Kinetix's rolling shutter (3.75 us/row in `max_scan_rows`, `scan_waveform`,
+`static_hadamard_waveform`, preflight), which is the wrong model for a global
+shutter; the Libra's dark offsets and its timing at 1.25/1.27 ms are
+unmeasured. With `camera_name` set to the Libra, preflight blocks scans on
+the missing offset, so nothing runs on the Kinetix's timing by accident.
+
 ## Parity issues (behaviour that may be a bug; reproduced, not fixed)
 
 - **P1. Reference-image orientation changed after the experiments.** `hadamard_ref.m` gained a transpose on 2026-02-10, after his 2025 data, alongside a Kinetix MEX change. In the newest snapshot, segmentation would run on the transposed image while drift correction compares untransposed scans with the untransposed `hadamard_ref`. The fixtures follow his 2025-03-08 session, which is the untransposed behaviour he actually ran. In Luminos the reference image, scans and DMD calibration must all share Luminos's camera orientation. **Confirmed 2026-10-13: the port follows the untransposed 2025 behaviour.** The transposed `hadamard_ref.m` stays frozen only as evidence.

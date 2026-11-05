@@ -17,6 +17,7 @@ arguments
     folder (1, 1) string
     options.validated (1, 1) logical = true
     options.calibration_movies cell = {[]}
+    options.camera_name (1, 1) string = ""
 end
 if ~isfolder(folder)
     mkdir(folder);
@@ -36,7 +37,8 @@ if isequal(movies, {[]})
 end
 backend = hadamard_stim.luminos.LuminosBackend(app, blue_threshold=15, ...
     hardware_validation_file=validation_file, calibration_movies=movies, ...
-    acquisition_function=@hadamard_stim.testing.fake_luminos_acquisition);
+    acquisition_function=@hadamard_stim.testing.fake_luminos_acquisition, ...
+    camera_name=options.camera_name);
 c = hadamard_stim.HadamardStimController(backend);
 end
 

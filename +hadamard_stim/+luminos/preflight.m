@@ -20,8 +20,8 @@ function report = preflight(app, cfg, options)
 %   the protocol drives already scheduled by someone else, a camera file
 %   the package cannot read, no blue calibration to compute a command
 %   from, no camera-to-DMD transform. What only differs from Yitong's rig
-%   (another DAQ clock, binning, a DMD calibration taken at another camera
-%   area) is a warning: it is said, with what it means for the data, and a
+%   (another DAQ clock, binning, a camera area reaching beyond the area the
+%   DMD calibration was measured on, where it is extrapolated) is a warning: it is said, with what it means for the data, and a
 %   run may go ahead once the operator chooses to. When a calibration was
 %   taken is shown and never judged: age alone is not a warning.
 %

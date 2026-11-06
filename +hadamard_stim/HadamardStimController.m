@@ -266,8 +266,9 @@ classdef HadamardStimController < handle
         function loadReferenceSnap(obj, file)
             % A Luminos Snap (the Snap button's or the HiLo tab's .mat) as
             % the reference image, instead of a Hadamard scan. Refused
-            % unless it is in the DMD calibration's camera grid
-            % (luminos.check_reference_snap); the image is used exactly as
+            % unless it is in the camera's acquisition grid now - any area,
+            % not only the DMD calibration's (luminos.check_reference_snap);
+            % the image is used exactly as
             % saved. Read only: the rig need not be prepared (so neither
             % the Hadamard calibration scans nor the blue calibration are
             % needed) and no device is begun or claimed. Segmentation,

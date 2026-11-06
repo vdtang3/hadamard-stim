@@ -281,12 +281,18 @@ classdef TestReadinessPolicy < matlab.unittest.TestCase
             testCase.verifyTrue(c.Preflight.can_run);
         end
 
-        function aDmdCalibrationAtAnotherAreaIsUsedWithAWarning(testCase)
+        function aDmdCalibrationAtAnotherAreaIsUsedWithoutRecalibrating(testCase)
+            % Measured on a larger area than the camera acquires: composed
+            % to the camera's area, no warning.
             [c, app, cfg] = tab_session(testCase.Folder);
             app.getDevice("ALP_DMD").ReferenceRoi = [0 0 512 512];
             c.setConfig(cfg);
             r = hadamard_stim.apply_controller_action(c, "prepare_rig", struct(), c.Revision);
             testCase.verifyTrue(r.ok, r.message);
+            c.runPreflight();
+            testCase.verifyEqual(status_of(c, "dmd_calibration"), "pass");
+            % Measured on a smaller area: used, extrapolated, with a warning.
+            app.getDevice("ALP_DMD").ReferenceRoi = [0 0 256 200];
             c.runPreflight();
             testCase.verifyEqual(status_of(c, "dmd_calibration"), "warning");
             % No transform at all blocks preparing.

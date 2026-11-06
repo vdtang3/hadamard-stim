@@ -379,13 +379,15 @@ classdef LuminosBackend < handle
 
         function [image, source] = load_reference_snap(obj, file)
             % A Luminos Snap (the Snap button's or the HiLo tab's .mat) as
-            % the reference image, if it is in the DMD calibration's camera
-            % grid (check_reference_snap). The image is returned exactly as
+            % the reference image, if it is in the camera's acquisition
+            % grid now (check_reference_snap); any area the DMD calibration
+            % can be composed to, not only the one it was measured at. The image is returned exactly as
             % saved. Read only, like geometry.
-            [dmd, ~] = obj.dmdAndCamera();
+            [dmd, camera] = obj.dmdAndCamera();
             [image, snap] = hadamard_stim.luminos.read_reference_snap(file);
+            [roi, bin] = hadamard_stim.luminos.camera_grid(camera);
             fit = hadamard_stim.luminos.check_reference_snap(snap, dmd, ...
-                obj.Options.profile.devices.camera.name);
+                obj.Options.profile.devices.camera.name, roi, bin);
             [folder, ~] = fileparts(file);
             source = struct("kind", "snap", "folder", string(folder), "file", snap.file, ...
                 "snap", rmfield(snap, "file"), "fit", fit);

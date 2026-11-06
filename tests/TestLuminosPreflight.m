@@ -37,8 +37,8 @@ classdef TestLuminosPreflight < matlab.unittest.TestCase
         Warning = struct( ...
             "unrelated_output",   {{@(app, rig) add_ambient(app, "Dev1/ao5"), "daq_outputs", "schedules Dev1/ao5"}}, ...
             "binned",             {{@(app, rig) assign(camera(app), "bin", 2), "camera_settings", "binned 2"}}, ...
-            "calibration_roi",    {{@(app, rig) assign(dmd(app), "ReferenceRoi", [0 0 512 512]), "dmd_calibration", "calibrate at the acquisition ROI"}}, ...
-            "old_calibration_roi", {{@(app, rig) old_mismatched_geometry(app), "dmd_calibration", "calibrate at the acquisition ROI"}}, ...
+            "calibration_roi",    {{@(app, rig) assign(dmd(app), "ReferenceRoi", [0 0 256 200]), "dmd_calibration", "calibration is extrapolated"}}, ...
+            "old_calibration_roi", {{@(app, rig) old_mismatched_geometry(app), "dmd_calibration", "calibration is extrapolated"}}, ...
             "blue_other_mode",    {{@(app, rig) blue_in_16_bit_camera_in_8(app), "blue_calibration", "now records raw 8-bit frames (uint8)"}})
         % The Kinetix modes the package reads: storage bits, pixel bits,
         % and the words the readiness says, offset included.
@@ -283,9 +283,10 @@ d.global_props_ = [];
 end
 
 function old_mismatched_geometry(app)
-% A DMD calibration taken at another area 5 minutes ago: new, still a warning.
+% A DMD calibration taken 5 minutes ago on a smaller area than the camera
+% acquires: new, still a warning (the calibration is extrapolated).
 d = dmd(app);
-d.ReferenceRoi = [0 0 512 512];
+d.ReferenceRoi = [0 0 256 200];
 d.MeasuredUtc = string(datetime("now", "TimeZone", "UTC") - minutes(5), "yyyy-MM-dd'T'HH:mm:ss'Z'");
 end
 

@@ -2,9 +2,9 @@ classdef TestReferenceSnap < matlab.unittest.TestCase
     %TESTREFERENCESNAP A Luminos Snap (e.g. from the HiLo tab) as the reference image.
     %
     %   HiLo tab -> Snap -> load_reference_snap -> segment -> approve ->
-    %   orange DMD mask -> preview / export. The Snap must be in the DMD
-    %   calibration's camera grid (luminos.check_reference_snap) and is
-    %   used exactly as saved. Loading needs no prepared rig (so no
+    %   orange DMD mask -> preview / export. The Snap must be in the
+    %   camera's acquisition grid (luminos.check_reference_snap) - any area,
+    %   not only the DMD calibration's - and is used exactly as saved. Loading needs no prepared rig (so no
     %   Hadamard calibration scans) and touches no device. From the image
     %   on, it is the scan reference's path: the same cells and masks for
     %   the same image and geometry.
@@ -163,6 +163,29 @@ classdef TestReferenceSnap < matlab.unittest.TestCase
             testCase.verifyEqual(r.identifier, "hadamard_stim:NoSnapFile");
         end
 
+        function aSnapAtANewFieldOfViewNeedsNoRecalibration(testCase)
+            % Once the animal is on: the camera at a smaller area, binned,
+            % that the DMD was never calibrated at. The Snap taken there
+            % loads, segments and draws through the same calibration.
+            [c, app] = testCase.session("new_fov");
+            cameras = app.getDevice("Camera");
+            camera = cameras(strcmp([cameras.name], "Teledyne Kinetix"));
+            camera.ROI = [64 320 40 240];     % [left width top height]
+            camera.bin = 2;
+            im = testCase.image();
+            im = im(40 + (1:2:240), 64 + (1:2:320));
+            file = testCase.writeSnap(im, roi=[64 40 320 240], bin=2);
+            act(c, "load_reference_snap", struct("file", file));
+            testCase.verifyEqual(c.ReferenceImage, im);
+            act(c, "propose_cells");
+            act(c, "approve_cells");
+            testCase.verifyNotEmpty(c.Cells.illum_mask);
+            testCase.verifyEqual(c.CellsGeometry.camera_roi, [64 40 320 240]);
+            testCase.verifyEqual(c.CellsGeometry.camera_bin, 2);
+            testCase.verifyNotEqual(c.CellsGeometry.drawn_by, "setPatterningROI");
+            testCase.verifyFalse(c.CellsGeometry.extrapolated);
+        end
+
         function aDmdWithoutCalibrationRefusesTheSnap(testCase)
             [c, app] = testCase.session("uncalibrated");
             app.getDevice("ALP_DMD").CalibratedCamera = "Grasshopper3";
@@ -296,20 +319,21 @@ classdef TestReferenceSnap < matlab.unittest.TestCase
             testCase.verifyEqual(snap.transforms(1).matrix, raw.snap.tform(1).tform.T');
 
             dmd = hadamard_stim.testing.FakeAlpDmd("DMD (shared)");
-            % The calibration of the Hadamard tests (448 x 328): refused.
-            testCase.verifyError(@() hadamard_stim.luminos.check_reference_snap(snap, dmd, "Teledyne Kinetix"), ...
-                "hadamard_stim:IncompatibleSnap");
-            % Calibrated at the Snap's area, with the Snap's transform: fits.
-            dmd.refimage = struct("img", zeros(3200, 3200), "bin", 1);
-            dmd.ReferenceRoi = [0 0 3200 3200];
             dmd.PairTransform = raw.snap.tform(1).tform;
-            fit = hadamard_stim.luminos.check_reference_snap(snap, dmd, "Teledyne Kinetix");
+            % Calibrated on a 448 x 328 area, the camera acquiring the full
+            % sensor as the Snap was: fits, no recalibration at the Snap's area.
+            fit = hadamard_stim.luminos.check_reference_snap(snap, dmd, "Teledyne Kinetix", [0 0 3200 3200], 1);
             testCase.verifyTrue(fit.transform_recorded);
             testCase.verifyEqual(fit.grid, [3200 3200]);
-            % The same area under another transform: taken under another calibration.
+            testCase.verifyEqual(fit.calibration_roi, [0 0 448 328]);
+            % The camera now acquires another area: the Snap's pixels are not
+            % the run's.
+            testCase.verifyError(@() hadamard_stim.luminos.check_reference_snap(snap, dmd, ...
+                "Teledyne Kinetix", [0 0 448 328], 1), "hadamard_stim:IncompatibleSnap");
+            % Under another transform: taken under another calibration.
             dmd.PairTransform = affinetform2d([1 0 2; 0 1 0; 0 0 1]);
-            testCase.verifyError(@() hadamard_stim.luminos.check_reference_snap(snap, dmd, "Teledyne Kinetix"), ...
-                "hadamard_stim:IncompatibleSnap");
+            testCase.verifyError(@() hadamard_stim.luminos.check_reference_snap(snap, dmd, ...
+                "Teledyne Kinetix", [0 0 3200 3200], 1), "hadamard_stim:IncompatibleSnap");
         end
     end
 

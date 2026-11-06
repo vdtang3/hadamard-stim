@@ -183,9 +183,10 @@ classdef TestRigOwnership < matlab.unittest.TestCase
             rig.release();
             c.setConfig(cfg);
             c.runPreflight();
-            % The DMD calibration's area is compared with this one.
+            % Inside the DMD calibration's area: the calibration is composed
+            % to this one, so nothing to warn about.
             geometry = c.Preflight.checks(string({c.Preflight.checks.id}) == "dmd_calibration");
-            testCase.verifyEqual(geometry.status, "warning");
+            testCase.verifyEqual(geometry.status, "pass");
         end
 
         % ---- Rolling shutter ---------------------------------------------

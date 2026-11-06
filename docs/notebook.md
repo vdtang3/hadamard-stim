@@ -1448,6 +1448,43 @@ shutter; the Libra's dark offsets and its timing at 1.25/1.27 ms are
 unmeasured. With `camera_name` set to the Libra, preflight blocks scans on
 the missing offset, so nothing runs on the Kinetix's timing by accident.
 
+## 2026-11-05: one DMD calibration for every camera area (no recalibration at a new FOV)
+
+On Firefly, once the animal was on, a Snap of the new field was refused
+because it did not match the DMD calibration's reference image (taken on a
+slide, at another camera area). The fix the message offered was to calibrate
+the DMD again, which is not possible with an animal on, and is not needed:
+Luminos fits the camera-to-DMD calibration in unbinned sensor coordinates and
+composes the reference image's origin into it at draw time
+(`Patterning_Device.setPatterningROI`, `compose_origin_shift`: "one
+calibration serves every crop").
+
+`active_geometry` now draws in the camera's current grid (acquisition ROI and
+binning, `camera_grid`):
+- the calibration's own grid: through `setPatterningROI` exactly as before,
+  so every existing result is unchanged;
+- any other area or binning: by the same steps (imresize to unbinned pixels,
+  imwarp onto the canvas) with the calibration composed with this area's
+  sensor origin; a calibration with no matrix (polynomial) is applied to the
+  mask padded out to its sensor position, Luminos's own fallback;
+- an area reaching beyond the calibrated one is drawn by extrapolating the
+  fit, and says so (identity `extrapolated`, a preflight warning).
+The identity records `camera_roi`, `camera_bin` and `drawn_by`.
+
+`check_reference_snap` now asks the Snap to be in the camera's grid as it
+acquires now, not in the calibration's. A Snap from another area than the
+camera's current one is still refused (its pixels are not the run's), with a
+message that says no DMD recalibration is needed.
+
+Tested (`TestDmdGeometryAtAnyArea`, with a fake DMD doing Luminos's warp): a
+spot at one sensor position lands at the same DMD position, to 1.5 mirrors,
+when found in the calibration's grid, a sub-area, a binned sub-area or a
+binned full area; an area beyond the calibration lands where the affine map
+puts it; the matrixless fallback agrees. `TestReferenceSnap` loads, segments
+and approves a binned Snap at a new area. Not yet checked on the rig: compare
+the orange preview of one cell drawn from a slide Snap and from a Snap of a
+sub-area.
+
 ## Parity issues (behaviour that may be a bug; reproduced, not fixed)
 
 - **P1. Reference-image orientation changed after the experiments.** `hadamard_ref.m` gained a transpose on 2026-02-10, after his 2025 data, alongside a Kinetix MEX change. In the newest snapshot, segmentation would run on the transposed image while drift correction compares untransposed scans with the untransposed `hadamard_ref`. The fixtures follow his 2025-03-08 session, which is the untransposed behaviour he actually ran. In Luminos the reference image, scans and DMD calibration must all share Luminos's camera orientation. **Confirmed 2026-10-13: the port follows the untransposed 2025 behaviour.** The transposed `hadamard_ref.m` stays frozen only as evidence.

@@ -140,10 +140,7 @@ classdef TestReferenceSnap < matlab.unittest.TestCase
             cases = {
                 "another camera",        testCase.writeSnap(im, name="Orca Fusion"), "IncompatibleSnap", "DMD is calibrated for Teledyne Kinetix"
                 "transposed",            testCase.writeSnap(im'), "IncompatibleSnap", "transposed"
-                "another ROI origin",    testCase.writeSnap(im, roi=[8 0 448 328]), "IncompatibleSnap", "camera area"
-                "another binning",       testCase.writeSnap(im(1:2:end, 1:2:end), bin=2), "IncompatibleSnap", "camera area"
-                "another area",          testCase.writeSnap(im(1:300, 1:400), roi=[0 0 400 300]), "IncompatibleSnap", "camera area"
-                "another calibration",   testCase.writeSnap(im, transform=[1 0 3; 0 1 0; 0 0 1]), "IncompatibleSnap", "another DMD calibration"
+                "no binning recorded",   testCase.writeSnap(im, bin=NaN), "IncompatibleSnap", "binning is not recorded"
                 "not finite",            testCase.writeSnap([NaN(1, 448); im(2:end, :)]), "InvalidSnap", "NaN"
                 "a TIFF",                testCase.writeFile("snap.tiff"), "InvalidSnap", ".mat"
                 "no snap",               testCase.writeFile("other.mat"), "InvalidSnap", "no variable"
@@ -161,6 +158,53 @@ classdef TestReferenceSnap < matlab.unittest.TestCase
             end
             r = hadamard_stim.apply_controller_action(c, "load_reference_snap", struct(), c.Revision);
             testCase.verifyEqual(r.identifier, "hadamard_stim:NoSnapFile");
+        end
+
+        function otherAreasAndCalibrationsLoadWithANotice(testCase)
+            % Another camera area or binning than the camera's now, or a
+            % transform recorded under another active calibration (e.g. the
+            % Libra's, reactivated at startup): the pixels are still placed
+            % on the sensor, so the Snap loads, with a notice, and its cells
+            % are drawn from its own area through the stored calibration.
+            im = testCase.image();
+            cases = {
+                "another ROI origin",  testCase.writeSnap(im, roi=[8 0 448 328]), "run's images", [8 0 448 328], 1
+                "another binning",     testCase.writeSnap(im(1:2:end, 1:2:end), bin=2), "run's images", [0 0 448 328], 2
+                "another area",        testCase.writeSnap(im(1:300, 1:400), roi=[0 0 400 300]), "run's images", [0 0 400 300], 1
+                "another calibration", testCase.writeSnap(im, transform=[1 0 3; 0 1 0; 0 0 1]), "stored Teledyne Kinetix calibration is used", [0 0 448 328], 1
+            };
+            for k = 1:size(cases, 1)
+                [c, ~] = testCase.session("notice" + k);
+                act(c, "load_reference_snap", struct("file", cases{k, 2}));
+                testCase.verifySubstring(c.SetupNotice, cases{k, 3}, cases{k, 1});
+                act(c, "propose_cells");
+                testCase.verifySubstring(c.SetupNotice, cases{k, 3}, cases{k, 1} + ": kept through segmentation");
+                testCase.verifyEqual(c.ProposalGeometry.camera_roi, cases{k, 4}, cases{k, 1});
+                testCase.verifyEqual(c.ProposalGeometry.camera_bin, cases{k, 5}, cases{k, 1});
+                act(c, "approve_cells");
+                testCase.verifyGreaterThan(nnz(c.Cells.illum_mask), 0, cases{k, 1});
+            end
+        end
+
+        function theCameraAreaChangingAfterApprovalDoesNotStopThePreview(testCase)
+            % The mask is on the DMD already: a new camera area, or the
+            % Kinetix calibration having been selected by Hadamard Stim (at
+            % startup another camera's was active), does not move it.
+            [p, app] = testCase.session("area_changed");
+            dmd = app.getDevice("ALP_DMD");
+            act(p, "prepare_rig");
+            dmd.ActiveIsPair = false;     % another camera's calibration active
+            act(p, "load_reference_snap", struct("file", testCase.writeSnap(testCase.image())));
+            act(p, "propose_cells");
+            act(p, "approve_cells");
+            testCase.verifyEqual(dmd.SelectedCamera, "Teledyne Kinetix");
+            cameras = app.getDevice("Camera");
+            camera = cameras(strcmp([cameras.name], "Teledyne Kinetix"));
+            camera.ROI = [64 320 40 240];
+            camera.bin = 2;
+            act(p, "start_orange_preview");
+            testCase.verifyEqual(logical(dmd.Target), p.Cells.illum_mask);
+            act(p, "stop_orange_preview");
         end
 
         function aSnapAtANewFieldOfViewNeedsNoRecalibration(testCase)
@@ -222,62 +266,6 @@ classdef TestReferenceSnap < matlab.unittest.TestCase
                 "Without drift correction the reference image is only where the cells came from.");
         end
 
-        function aLibraSnapTargetsThroughTheLibrasCalibration(testCase)
-            % Firefly with the Tucsen Libra: the tab's camera_name names it.
-            % Its Snaps are listed, loaded through its own DMD calibration,
-            % segmented, approved and exported, with no prepared rig; a
-            % Kinetix Snap is refused, and so is a Libra Snap on a tab
-            % still set for the Kinetix.
-            [c, app] = testCase.session("libra", camera_name="Libra 5514 Pro");
-            libra = hadamard_stim.testing.FakeLuminosCamera("Libra 5514 Pro");
-            libra.type = 4;
-            libra.cam_id = "21626005";
-            libra.App = app;
-            app.Devices{end + 1} = libra;
-            app.getDevice("ALP_DMD").CalibratedCamera = "Libra 5514 Pro";
-            image = testCase.image();
-            file = testCase.writeSnap(image, name="Libra 5514 Pro", ...
-                pixel_to_sample_um=[0 -4.1; 4.1 0]);
-
-            today = fullfile(testCase.Folder, "libra_data", "20261105");
-            mkdir(fullfile(today, "Snaps"));
-            app.datafolder = today;
-            listed = [fullfile(today, "Snaps", "090000_cam-Libra5514Pro.mat")
-                fullfile(today, "Snaps", "080000_cam-TeledyneKinetix.mat")];
-            for k = 1:numel(listed)
-                fclose(fopen(listed(k), "w"));
-            end
-            view = hadamard_stim.controller_view(c, "reference_snaps");
-            testCase.verifyTrue(view.ok, view.message);
-            testCase.verifyEqual([view.data.file], listed(1), "Only the Libra's Snaps are offered.");
-            r = act(c, "load_reference_snap", struct("file", file));
-            testCase.verifyEqual(r.state.reference.snap.camera, "Libra 5514 Pro");
-            testCase.verifyEqual(r.state.reference.snap.um_per_px, 4.1, "AbsTol", 1e-12);
-            testCase.verifyEqual(c.ReferenceImage, image);
-            act(c, "propose_cells");
-            act(c, "approve_cells");
-            testCase.verifyGreaterThan(size(c.Cells.cell_coord, 1), 0);
-            testCase.verifyEqual(c.CellsGeometry.camera, "Libra 5514 Pro");
-            stem = fullfile(testCase.Folder, "libra_orange_mask");
-            act(c, "export_orange_mask", struct("file_stem", stem));
-            saved = load(stem + ".mat");
-            testCase.verifyEqual(saved.mask, c.Cells.illum_mask);
-            testCase.verifyEqual(saved.info.dmd_calibration.camera, "Libra 5514 Pro");
-
-            kinetixSnap = testCase.writeSnap(image);
-            r = hadamard_stim.apply_controller_action(c, "load_reference_snap", ...
-                struct("file", kinetixSnap), c.Revision);
-            testCase.verifyFalse(r.ok, "A Kinetix Snap is not in the Libra's calibration.");
-
-            % The default profile is the Kinetix: a Libra Snap is refused.
-            [k, kapp] = testCase.session("kinetix_tab");
-            kapp.getDevice("ALP_DMD").CalibratedCamera = "Teledyne Kinetix";
-            r = hadamard_stim.apply_controller_action(k, "load_reference_snap", ...
-                struct("file", file), k.Revision);
-            testCase.verifyFalse(r.ok, "A Libra Snap is not in the Kinetix's calibration.");
-            testCase.verifyEmpty(k.ReferenceImage);
-        end
-
         function theCameraSnapsAreListedNewestFirst(testCase)
             [c, app] = testCase.session("listing");
             today = fullfile(testCase.Folder, "data", "20261103");
@@ -328,12 +316,12 @@ classdef TestReferenceSnap < matlab.unittest.TestCase
             testCase.verifyEqual(fit.calibration_roi, [0 0 448 328]);
             % The camera now acquires another area: the Snap's pixels are not
             % the run's.
-            testCase.verifyError(@() hadamard_stim.luminos.check_reference_snap(snap, dmd, ...
-                "Teledyne Kinetix", [0 0 448 328], 1), "hadamard_stim:IncompatibleSnap");
-            % Under another transform: taken under another calibration.
+            fit = hadamard_stim.luminos.check_reference_snap(snap, dmd, "Teledyne Kinetix", [0 0 448 328], 1);
+            testCase.verifyNotEmpty(fit.warnings);
+            % Under another transform: taken under another calibration, said.
             dmd.PairTransform = affinetform2d([1 0 2; 0 1 0; 0 0 1]);
-            testCase.verifyError(@() hadamard_stim.luminos.check_reference_snap(snap, dmd, ...
-                "Teledyne Kinetix", [0 0 3200 3200], 1), "hadamard_stim:IncompatibleSnap");
+            fit = hadamard_stim.luminos.check_reference_snap(snap, dmd, "Teledyne Kinetix", [0 0 3200 3200], 1);
+            testCase.verifyFalse(fit.transform_matches);
         end
     end
 
@@ -344,11 +332,9 @@ classdef TestReferenceSnap < matlab.unittest.TestCase
                 name (1, 1) string
                 options.calibration_movies cell = {[]}
                 options.validated (1, 1) logical = true
-                options.camera_name (1, 1) string = ""
             end
             [c, app, cfg] = tab_session(fullfile(testCase.Folder, name), ...
-                calibration_movies=options.calibration_movies, validated=options.validated, ...
-                camera_name=options.camera_name);
+                calibration_movies=options.calibration_movies, validated=options.validated);
             act(c, "set_config", struct("config", cfg));
         end
 

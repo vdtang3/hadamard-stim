@@ -94,13 +94,11 @@ classdef TestDmdGeometryAtAnyArea < matlab.unittest.TestCase
             % Its recorded transform is the calibration's: still accepted.
             snap.transforms = struct("name", "DMD (shared)", "matrix", dmd.PairTransform.A);
             hadamard_stim.luminos.check_reference_snap(snap, dmd, "Teledyne Kinetix", [100 60 300 200], 2);
-            % The camera moved to another area since: the Snap's pixels are
-            % not where the run's images are, so it is refused - without
-            % asking for a DMD calibration.
-            err = verifyThrows(@() hadamard_stim.luminos.check_reference_snap(snap, dmd, ...
-                "Teledyne Kinetix", [0 0 448 328], 1));
-            testCase.verifyEqual(err.identifier, 'hadamard_stim:IncompatibleSnap');
-            testCase.verifySubstring(err.message, "no DMD recalibration is needed");
+            % The camera acquires another area now: still accepted - the
+            % cells are drawn from the Snap's own area - with a notice that
+            % the run's images are in another grid. No recalibration.
+            fit = hadamard_stim.luminos.check_reference_snap(snap, dmd, "Teledyne Kinetix", [0 0 448 328], 1);
+            testCase.verifySubstring(strjoin(fit.warnings), "no recalibration needed");
         end
     end
 

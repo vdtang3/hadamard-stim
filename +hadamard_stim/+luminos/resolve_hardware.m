@@ -1,9 +1,11 @@
 function [devices, failures] = resolve_hardware(app, profile)
-%RESOLVE_HARDWARE The Luminos devices the adapter uses, found by name. Read only.
+%RESOLVE_HARDWARE The Luminos devices the adapter uses. Read only.
 %
 %   [devices, failures] = hadamard_stim.luminos.resolve_hardware(app, profile)
 %
-%   devices.<role> is the device, or [] when it is missing; failures has
+%   Found by name, except the imaging camera, which is found by its Luminos
+%   camera type (find_camera_by_type: the one Kinetix, whatever it is
+%   called). devices.<role> is the device, or [] when it is missing; failures has
 %   one entry (role, message) per device that is missing or ambiguous. Roles are
 %   the fields of profile.devices (daq, dmd, camera, behavior_camera, stage,
 %   blue_modulator). devices.cameras is every camera, in Luminos order.
@@ -12,6 +14,13 @@ devices = struct();
 for role = string(fieldnames(profile.devices))'
     spec = profile.devices.(role);
     found = [];
+    if isfield(spec, "camera_type")
+        [devices.(role), message] = hadamard_stim.luminos.find_camera_by_type(app, spec);
+        if strlength(message) > 0
+            failures(end+1) = struct("role", role, "message", message); %#ok<AGROW>
+        end
+        continue
+    end
     try
         found = app.getDevice(spec.type, "name", spec.name, "displayWarning", false);
     catch err

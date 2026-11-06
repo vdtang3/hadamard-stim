@@ -78,6 +78,11 @@ connectivity session with the face camera and wheel encoder off.
                            LuminosBackend, preflight, diagnostics,
                            calibrations, Firefly facts)
   +testing/                simulated rig, his affine geometry, fake Luminos
+  +manual/                 helpers of the manual HiLo tools (image reading)
+manual_hilo_patterns.m     manual HiLo: U and S DMD patterns (Luminos's generator)
+manual_hilo_display.m      show a pattern or mask on the DMD (Target + Write_Static)
+manual_hilo_reconstruct.m  HiLo from two hand-taken Snaps, offline (Luminos's reconstruct_hilo)
+manual_segment_dmd.m       his segmentation and the orange mask, without the tab
 setup_project.m            adds the repository root to the path
 run_tests.m                off-rig tests
 config/paths.example.m     machine paths, used only by the fixture generator
@@ -155,7 +160,7 @@ or when the experimenter has reason to distrust the calibration.
 |---|---|---|---|
 | **Sequence queue** (Run check) | whether the live ALP driver supports the sequence queue | connectivity: the live answer is; it is asked at every Check readiness anyway | after driver changes |
 | **Queue playback on slide** (Run on slide; uniform slide in place) | a small queue, loaded on the protocol's rising edge and stepped by DAQ triggers, imaged and compared picture by picture with the queue model | no: commissioning history, shown as a note (never run, failed, or run before a change to the DMD, its serial or Luminos's DMD code says so); never asked before a run | after DMD, driver or Luminos DMD-code changes |
-| **DMD geometry** (Luminos DMD tab) | the camera-to-DMD transform for the imaging camera (the Teledyne Kinetix, or the device's `camera_name`, e.g. the Libra) | yes: none for that camera blocks; taken at another camera area is a warning | when the camera area, binning or light path changes |
+| **DMD geometry** (Luminos DMD tab) | the camera-to-DMD transform for the Teledyne Kinetix (found as Luminos's one camera of type 3); selected automatically when the DMD is using another camera's; one calibration serves every camera area and binning | yes: none for the Kinetix blocks; a camera area reaching beyond the calibrated one is a warning (extrapolated) | when the light path changes |
 | **Hadamard calibration scans** (Take new scans, or Find earlier scans → Reuse) | his `had_cal` pinhole scans on a uniform slide, which every reconstruction uses | when drift correction or the z-reference is on; taken at another camera area or binning is a warning | when the camera area, binning or illumination changes |
 | **Blue LED calibration** (Calibrate blue LED; slide in place) | Luminos's slide calibration of the blue LED against the imaging camera | connectivity: yes (blocker without one) | when the LED, light path or camera settings change |
 
@@ -320,6 +325,61 @@ video) and the **wheel encoder** (A/B lines, default his wiring
 settings). Off, nothing about them is required, driven or triggered, and
 the recipe says they were off. On but absent is a blocker: the requested
 acquisition cannot be made.
+
+### Manual HiLo, segmentation and mask (without the HiLo and Hadamard Stim tabs)
+
+Four command-window functions in the repository root. They never take an
+image, arm the camera, drive the DAQ or trigger anything: Snaps are taken
+with Luminos's own camera controls. They reuse Luminos's HiLo code
+(`src/Experimental_Scripts/HiLo`, on the path in Luminos's MATLAB) and this
+package's segmentation, DMD geometry and mask export.
+
+```matlab
+dmd = app.getDevice("ALP_DMD");                       % DMD (shared), orange
+p = manual_hilo_patterns(dmd, blockSize=8, seed=0);   % saves <HHMMSS>_hilo_patterns.mat here
+manual_hilo_display(dmd, p.uniform)                   % orange on; Snap (Kinetix) = U
+manual_hilo_display(dmd, p.structured)                % Snap again = S
+manual_hilo_display(dmd, "dark")
+r = manual_hilo_reconstruct("<datafolder>\Snaps\101500_cam-TeledyneKinetix.mat", ...
+                            "<datafolder>\Snaps\101530_cam-TeledyneKinetix.mat", filterScale=8);
+% -> <datafolder>\Snaps\<HHMMSS>_hilo-manual_cam-TeledyneKinetix.mat/.tif
+m = manual_segment_dmd(r.files.mat, dmd, review=true);   % tune, click cells, Accept
+manual_hilo_display(dmd, m.files.mat)                 % the kept cells' orange mask
+```
+
+- `manual_hilo_patterns`: U is the whole DMD canvas, or with `camera=` the
+  HiLo tab's field mask (`hilo_fov_mask`); S is `generate_hilo_pattern(U,
+  seed, substream, block_size)`. The tab uses block 1 and, at its first
+  plane, substream 2 (the default here).
+- `manual_hilo_reconstruct` runs offline. Give it the Snaps' `.mat` files
+  (or their `.tiff` with the `.mat` beside it): they record the camera, its
+  area and binning, and the DMD transforms, which the result keeps. Its
+  `.mat` is a Luminos Snap of the HiLo image, so the tab's **Load Snap**
+  lists and loads it (FOV setup), and segmentation, approval and the orange
+  mask work as for any Snap. Arrays or bare TIFFs need `cameraName`, `roi`
+  (`[x0 y0 width height]`, unbinned) and `bin`; without them the result can
+  be segmented but not drawn on the DMD.
+- `manual_segment_dmd` is the tab's segmentation and mask code, with the
+  tab's settings struct (`cfg.segmentation`: the same names, defaults and
+  checks). Segmentation needs no DMD; the mask is made only for accepted
+  cells, through the Kinetix calibration at the image's own area and
+  binning. `review=true` opens a tuner: the tab's settings, Segment again
+  (same image, no hardware), click cells to drop or restore them, Load/Save
+  settings (.json), Accept. Explicit settings:
+  `manual_segment_dmd(file, dmd, nExclude=5, threshold=320, candidatePool=1000,
+  minAreaPx=10, filterSizePx=7, illumSpotSize=5, stimSpotSize=3, keep=[1:40 45])`,
+  or `settings="mine.json"` (written by `saveSettings=` or the tuner's
+  Save, or an earlier result `.mat`). `nExclude` is required, as in the tab.
+  Its `<stem>.mat` is the tab's orange mask export: the DMD tab's "Hadamard
+  Stim Orange Mask" pattern projects it too.
+
+The DMD calibration belongs to the Kinetix and the light path, not to a
+field of view: any stage position, camera area or binning (in the tab or
+here) is drawn through the stored calibration, with a warning where the
+area extends beyond the area it was measured on (extrapolated). Refused
+only: no calibration stored for the Kinetix (another camera's is never
+used), a transform that is not finite or not invertible, or an image that
+does not record where on the sensor it was taken.
 
 ### Troubleshooting
 

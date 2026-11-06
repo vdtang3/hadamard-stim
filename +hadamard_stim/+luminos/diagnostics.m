@@ -32,7 +32,7 @@ d.cameras = struct("name", {}, "type", {}, "cam_id", {}, "role", {}, "trigger", 
     "roi", {}, "compression_method", {});
 for cam = reshape(devices.cameras, 1, [])
     role = "other";
-    if string(cam.name) == profile.devices.camera.name
+    if ~isempty(devices.camera) && string(cam.name) == string(devices.camera.name)
         role = "imaging";
     elseif string(cam.name) == profile.devices.behavior_camera.name
         role = "behavior";

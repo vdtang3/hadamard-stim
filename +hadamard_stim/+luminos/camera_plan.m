@@ -1,11 +1,14 @@
-function plan = camera_plan(spec, camera_names, profile)
+function plan = camera_plan(spec, camera_names, profile, imaging_name)
 %CAMERA_PLAN How each Luminos camera is set for one acquisition.
 %
 %   plan = hadamard_stim.luminos.camera_plan(spec, camera_names, profile)
+%   plan = hadamard_stim.luminos.camera_plan(..., imaging_name)
 %
 %   spec          acquisition_spec, with its waveform
 %   camera_names  names of the rig's cameras, in Luminos order
 %                 (app.getDevice('Camera'); frames<k>.bin follows it)
+%   imaging_name  the Kinetix's name as found (find_camera_by_type);
+%                 profile.devices.camera.name when not given
 %
 %   plan(k): name, role ("imaging", "behavior" or "other"),
 %   frametrigger_source, frames_requested, acquisition_exposure_s, and
@@ -18,6 +21,10 @@ function plan = camera_plan(spec, camera_names, profile)
 %   one free-running frame ("Off"). The face camera is triggered only when
 %   spec.streams.face_camera is on; otherwise its trigger row is not driven
 %   (LuminosRig) and it is left like any other untriggered camera.
+if nargin < 4
+    imaging_name = profile.devices.camera.name;
+end
+imaging_name = string(imaging_name);
 imaging_frames = hadamard_stim.waveform.rising_edges(spec.waveform, profile.camera_trigger_row);
 if imaging_frames ~= spec.n_frames
     error("hadamard_stim:CameraFrameMismatch", ...
@@ -36,7 +43,7 @@ for k = 1:numel(camera_names)
     entry = struct("name", name, "role", "other", "frametrigger_source", "Off", ...
         "frames_requested", 1, "acquisition_exposure_s", NaN, ...
         "file", "frames" + k + ".bin");
-    if name == profile.devices.camera.name
+    if name == imaging_name
         entry.role = "imaging";
         entry.frametrigger_source = "External";
         entry.frames_requested = imaging_frames;
@@ -52,6 +59,6 @@ for k = 1:numel(camera_names)
 end
 if ~any([plan.role] == "imaging")
     error("hadamard_stim:NoImagingCamera", "No camera named %s on this rig.", ...
-        profile.devices.camera.name);
+        imaging_name);
 end
 end

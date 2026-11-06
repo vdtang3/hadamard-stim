@@ -1,15 +1,14 @@
-function profile = firefly_profile(camera_name)
+function profile = firefly_profile()
 %FIREFLY_PROFILE What the adapter needs to know about Firefly, and nothing else.
 %
 %   profile = hadamard_stim.luminos.firefly_profile()
-%   profile = hadamard_stim.luminos.firefly_profile(camera_name)
 %
-%   camera_name is the imaging camera's Luminos device name; by default
-%   "Teledyne Kinetix", the camera Yitong's experiment was built on. Another
-%   camera (Firefly's Tucsen "Libra 5514 Pro") changes which camera's Snaps
-%   and DMD calibration are accepted, and nothing else: its dark offsets are
-%   unmeasured, so camera_format gives its modes none and preflight refuses
-%   scans with it until they are added to camera_offsets.
+%   The imaging camera is Firefly's Teledyne Kinetix, the camera Yitong's
+%   experiment was built on, and only it. It is found by what it is - the
+%   one Luminos camera of type 3 (PVCAM; camera_type below) - not by its
+%   display name, so a renamed Kinetix is still found and the Grasshopper3
+%   and Blackfly (GenTL, type 4) are never taken in its place
+%   (resolve_hardware). name is what Firefly.json calls it, for messages.
 %
 %   Every Firefly-specific fact the adapter relies on is here, so none of
 %   them leaks into +protocol or +yitong. Device names are the ones in
@@ -21,15 +20,12 @@ function profile = firefly_profile(camera_name)
 %   some of his ports now carry other Luminos devices (now_used_by). Rows
 %   that are zero throughout an acquisition are not driven at all (see
 %   daq_records), which is what keeps the adapter off those ports.
-arguments
-    camera_name (1, 1) string = "Teledyne Kinetix"
-end
 profile.rig_name = "Firefly";
 profile.owner = "hadamard_stim";
 
 profile.devices.daq = struct("type", "DAQ", "name", "DAQ_Session");
 profile.devices.dmd = struct("type", "ALP_DMD", "name", "DMD (shared)");
-profile.devices.camera = struct("type", "Camera", "name", camera_name);
+profile.devices.camera = struct("type", "Camera", "name", "Teledyne Kinetix", "camera_type", 3);
 profile.devices.behavior_camera = struct("type", "Camera", "name", "Grasshopper3");
 profile.devices.stage = struct("type", "Newport_Motor_Controller", "name", "NewportTRB25CC");
 profile.devices.blue_modulator = struct("type", "NI_DAQ_Modulator", "name", "Blue LED 488");
@@ -69,9 +65,6 @@ profile.daq_clock_source = "Internal Dev1";
 % depth: another mode at the same depth may sit elsewhere. A 16-bit mode
 % not listed takes his 100 (every recording he reconstructed was 16-bit);
 % an 8-bit mode not listed has no offset, and preflight refuses it.
-% Only Yitong's camera takes his 100 for a 16-bit mode not listed
-% (camera_format); any other camera's unlisted modes have no offset.
-profile.unlisted_16bit_offset_camera = "Teledyne Kinetix";
 offset = @(id, label, bits, counts, source) struct("mode_id", id, "mode_label", label, ...
     "storage_bits", bits, "offset", counts, "source", source);
 profile.camera_offsets = [
@@ -89,7 +82,7 @@ profile.luminos_dmd_paths = "src/Devices/Patterning/DMD/ALP";
 channel = @(name, port, kind, now_used_by) struct("name", name, "port", port, ...
     "kind", kind, "now_used_by", now_used_by);
 profile.channels = [
-    channel("cameraTrigger",     "Dev1/port0/line26", "do", camera_name + " trigger")
+    channel("cameraTrigger",     "Dev1/port0/line26", "do", "Teledyne Kinetix trigger")
     channel("grashopperTrigger", "Dev1/port0/line0",  "do", "Grasshopper3 trigger")
     channel("dmdTrigger",        "Dev1/port0/line8",  "do", "DMD (shared) trigger")
     channel("blueIntensity",     "Dev1/ao2",          "ao", "Blue LED 488")
@@ -107,7 +100,7 @@ profile.channels = [
 % recipe (build_recipe, context.standing_deviations).
 profile.standing_deviations = [
     "Blue linearisation uses the active Luminos calibration of ""Blue LED 488"", not his blueCal.mat; the intensity threshold is the configured blue_threshold (parity issue P2)."
-    "Masks are projected through the Luminos DMD calibration for the " + camera_name + ", not his affine registration and correction transform."
+    "Masks are projected through the Luminos DMD calibration for the Teledyne Kinetix, not his affine registration and correction transform."
     "Waveform rows that are zero throughout an acquisition are not driven; his DAQ held them at 0 V. On Firefly some of those ports now belong to other devices (Heater Set Out, shutter405, Whisker Stim)."
     "Luminos ends every driven port at 0, so IRVoltage drops from 0.5 V to 0 V on the last sample and stays there between acquisitions."
     "The behaviour camera is recorded by Luminos in the same acquisition, triggered by his grashopperTrigger line, instead of by SpinView."

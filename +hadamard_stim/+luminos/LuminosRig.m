@@ -285,7 +285,8 @@ classdef LuminosRig < handle
             end
             format = obj.imagingFormat();
             cameras = reshape(obj.Devices.cameras, 1, []);
-            plan = hadamard_stim.luminos.camera_plan(spec, string({cameras.name}), obj.Profile);
+            plan = hadamard_stim.luminos.camera_plan(spec, string({cameras.name}), obj.Profile, ...
+                string(obj.Devices.camera.name));
             streams = spec_streams(spec);
             skip = strings(1, 0);
             if ~streams.face_camera

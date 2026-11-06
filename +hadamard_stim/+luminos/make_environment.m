@@ -159,7 +159,7 @@ if isempty(folders)
     return
 end
 names = string({devices.cameras.name});
-k = find(names == profile.devices.camera.name, 1);
+k = find(names == string(devices.camera.name), 1);
 for folder = folders(:)'
     movies{end+1} = Extract_Mov(char(folder), cam_indices=k); %#ok<AGROW>
 end

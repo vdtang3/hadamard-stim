@@ -7,6 +7,10 @@ classdef LuminosWarpDmd < hadamard_stim.testing.FakeAlpDmd
     %   (sensor -> DMD) composed with the reference image's sensor origin.
     %   PairTransform is that calibration. Lets a test compare a mask drawn
     %   in the calibration's own grid with one drawn from another camera area.
+    properties
+        tform = []          % Patterning_Device's active transform (read by hilo_fov_mask)
+    end
+
     methods
         function obj = LuminosWarpDmd(name)
             obj@hadamard_stim.testing.FakeAlpDmd(name);

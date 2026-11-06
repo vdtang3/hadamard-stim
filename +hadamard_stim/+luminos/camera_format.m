@@ -31,18 +31,12 @@ function f = camera_format(camera, options)
 %
 %   The offset is looked up by mode (id and label, firefly_profile
 %   camera_offsets). A 16-bit mode not listed, or 16 bits with no mode
-%   (a number, a record from before modes were recorded), takes his 100 -
-%   on his camera (unlisted_16bit_offset_camera, the Kinetix) only. A camera
-%   object of any other name (the Libra) has no offset for a mode not listed,
-%   whatever its depth: its black level is not his. A recorded f keeps the
-%   offset it recorded.
+%   (a number, a record from before modes were recorded), takes his 100.
+%   A recorded f keeps the offset it recorded.
 arguments
     camera
     options.offsets struct = hadamard_stim.luminos.firefly_profile().camera_offsets
-    options.unlisted_16bit_offset_camera (1, 1) string = ...
-        hadamard_stim.luminos.firefly_profile().unlisted_16bit_offset_camera
 end
-his_camera = true;
 if isnumeric(camera)
     f = describe(double(camera), double(camera), "", "", "None");
 elseif isstruct(camera) && isfield(camera, "storage_bits")
@@ -60,22 +54,20 @@ elseif isstruct(camera) && isfield(camera, "storage_bits")
     end
 else
     storage = double(read(camera, "bit_depth", 16));
-    his_camera = string(read(camera, "name", options.unlisted_16bit_offset_camera)) ...
-        == options.unlisted_16bit_offset_camera;
     f = describe(storage, double(read(camera, "pixel_bit_depth", storage)), ...
         string(read(camera, "bit_mode_id", "")), string(read(camera, "bit_mode_label", "")), ...
         string(read(camera, "compression_method", "None")));
 end
-f = with_offset(f, options.offsets, his_camera);
+f = with_offset(f, options.offsets);
 end
 
-function f = with_offset(f, offsets, his_camera)
+function f = with_offset(f, offsets)
 k = find(arrayfun(@(o) o.mode_id == f.mode_id && o.mode_label == f.mode_label ...
     && o.storage_bits == f.storage_bits, offsets), 1);
 if ~isempty(k)
     f.offset = offsets(k).offset;
     f.offset_source = offsets(k).source;
-elseif f.storage_bits == 16 && his_camera
+elseif f.storage_bits == 16
     f.offset = 100;
     f.offset_source = "Yitong's 100 (16-bit; mode not in camera_offsets)";
 else

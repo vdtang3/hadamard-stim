@@ -23,8 +23,6 @@ classdef LuminosBackend < handle
     %                               Luminos's data folder for the day
     %     wheel_encoder_lines       the encoder's A and B digital lines;
     %                               empty means his wiring (firefly_profile)
-    %     camera_name               the imaging camera's Luminos name; empty
-    %                               means the Kinetix (firefly_profile)
     %
     %   Options for tests: calibration_movies, acquisition_function,
     %   blue_calibration_function, slide_queue_frame_means, profile,
@@ -56,13 +54,6 @@ classdef LuminosBackend < handle
                 % Luminos's DMD code differs; tests substitute a fake.
                 options.dmd_code_changed_function = @hadamard_stim.luminos.dmd_code_changed
                 options.profile struct = hadamard_stim.luminos.firefly_profile()
-                % The imaging camera's Luminos name when it is not the
-                % Kinetix (the Hadamard_Stim device's camera_name): the
-                % profile for that camera replaces the default one.
-                options.camera_name (1, 1) string = ""
-            end
-            if strlength(options.camera_name) > 0
-                options.profile = hadamard_stim.luminos.firefly_profile(options.camera_name);
             end
             obj.App = app;
             obj.Options = options;
@@ -191,9 +182,9 @@ classdef LuminosBackend < handle
             % package's. Read only, cheap enough for every getState.
             cam = [];
             try
-                spec = obj.Options.profile.devices.camera;
-                c = obj.App.getDevice(spec.type, "name", spec.name, "displayWarning", false);
-                if numel(c) ~= 1
+                c = hadamard_stim.luminos.find_camera_by_type(obj.App, ...
+                    obj.Options.profile.devices.camera);
+                if isempty(c)
                     return
                 end
                 roi = double(c.getROIForAcquisition());   % [x width y height], unbinned
@@ -296,8 +287,12 @@ classdef LuminosBackend < handle
             if isequal(read(obj.App, "acquisition_active", false), true)
                 error("hadamard_stim:LuminosBusy", "Luminos is acquiring; wait for it to finish.");
             end
+            [camera, message] = hadamard_stim.luminos.find_camera_by_type(obj.App, profile.devices.camera);
+            if isempty(camera)
+                error("hadamard_stim:NoImagingCamera", "%s", message);
+            end
             result = obj.Options.blue_calibration_function(obj.App, ...
-                profile.devices.blue_modulator.name, camera=profile.devices.camera.name);
+                profile.devices.blue_modulator.name, camera=string(camera.name));
         end
 
         function hw = calibration_hardware(obj, cfg)
@@ -369,25 +364,36 @@ classdef LuminosBackend < handle
                 wheel_encoder_lines=obj.Settings.wheel_encoder_lines);
         end
 
-        function geometry = geometry(obj)
-            % The active DMD calibration (active_geometry), for drawing
-            % cells before the rig is prepared. Read only: no device is
-            % begun or claimed, and drawing projects nothing.
+        function geometry = geometry(obj, area)
+            % The imaging camera's DMD calibration (active_geometry), for
+            % drawing cells before the rig is prepared: in the camera's
+            % grid now, or in area (struct roi [x0 y0 width height]
+            % unbinned, bin), e.g. a Snap's. Read only: no device is begun
+            % or claimed, and drawing projects nothing.
+            arguments
+                obj
+                area struct = struct()
+            end
             [dmd, camera] = obj.dmdAndCamera();
+            if isfield(area, "roi")
+                camera = struct("name", string(camera.name), "roi", area.roi, "bin", area.bin);
+            end
             [geometry, ~] = hadamard_stim.luminos.active_geometry(dmd, camera);
         end
 
         function [image, source] = load_reference_snap(obj, file)
             % A Luminos Snap (the Snap button's or the HiLo tab's .mat) as
-            % the reference image, if it is in the camera's acquisition
-            % grid now (check_reference_snap); any area the DMD calibration
-            % can be composed to, not only the one it was measured at. The image is returned exactly as
-            % saved. Read only, like geometry.
+            % the reference image, if its pixels can be placed on the DMD
+            % (check_reference_snap): the Kinetix's, with its area recorded,
+            % and a stored calibration. Any area or binning, the camera's now
+            % or not (fit.warnings says when not). The image is returned
+            % exactly as saved. Read only, like geometry.
             [dmd, camera] = obj.dmdAndCamera();
             [image, snap] = hadamard_stim.luminos.read_reference_snap(file);
+            hadamard_stim.luminos.use_kinetix_calibration(dmd, camera);
             [roi, bin] = hadamard_stim.luminos.camera_grid(camera);
             fit = hadamard_stim.luminos.check_reference_snap(snap, dmd, ...
-                obj.Options.profile.devices.camera.name, roi, bin);
+                string(camera.name), roi, bin);
             [folder, ~] = fileparts(file);
             source = struct("kind", "snap", "folder", string(folder), "file", snap.file, ...
                 "snap", rmfield(snap, "file"), "fit", fit);
@@ -401,7 +407,11 @@ classdef LuminosBackend < handle
             if strlength(today) == 0
                 return
             end
-            tag = "_cam-" + regexprep(obj.Options.profile.devices.camera.name, "[^A-Za-z0-9]", "");
+            camera = hadamard_stim.luminos.find_camera_by_type(obj.App, obj.Options.profile.devices.camera);
+            if isempty(camera)
+                return
+            end
+            tag = "_cam-" + regexprep(string(camera.name), "[^A-Za-z0-9]", "");
             found = [dir(fullfile(today, "Snaps", "*" + tag + ".mat")); ...
                 dir(fullfile(fileparts(today), "*", "Snaps", "*" + tag + ".mat"))];
             [~, unique_rows] = unique(fullfile(string({found.folder}), string({found.name})), "stable");
@@ -452,13 +462,17 @@ classdef LuminosBackend < handle
 
     methods (Access = private)
         function [dmd, camera] = dmdAndCamera(obj)
-            [devices, ~] = hadamard_stim.luminos.resolve_hardware(obj.App, obj.Options.profile);
+            [devices, failures] = hadamard_stim.luminos.resolve_hardware(obj.App, obj.Options.profile);
             dmd = devices.dmd;
             camera = devices.camera;
-            if isempty(dmd) || isempty(camera)
+            if isempty(camera)
+                message = string(failures(arrayfun(@(f) string(f.role) == "camera", failures)).message);
+                error("hadamard_stim:NoImagingCamera", "%s", message);
+            end
+            if isempty(dmd)
                 error("hadamard_stim:NoDmdCalibration", ...
-                    "The DMD calibration cannot be read: Luminos has no %s and %s by those names.", ...
-                    obj.Options.profile.devices.dmd.name, obj.Options.profile.devices.camera.name);
+                    "The DMD calibration cannot be read: Luminos has no %s.", ...
+                    obj.Options.profile.devices.dmd.name);
             end
         end
 

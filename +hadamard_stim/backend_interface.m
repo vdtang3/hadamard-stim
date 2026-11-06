@@ -55,13 +55,14 @@ function methods_ = backend_interface()
 %                                  height], width, height, bin, frame_size
 %                                  [rows cols], bit_depth, bit_mode; [] when
 %                                  it cannot be read
-%     geometry = geometry()        the active DMD calibration (as env.geometry),
-%                                  read only, for drawing cells before the
-%                                  rig is prepared
+%     geometry = geometry(area)    the imaging camera's DMD calibration (as
+%                                  env.geometry), in the camera's grid or in
+%                                  area (roi, bin: a Snap's); read only, for
+%                                  drawing cells before the rig is prepared
 %     [image, source] = load_reference_snap(file)
 %                                  a Luminos Snap as the reference image,
-%                                  refused unless it is in the DMD
-%                                  calibration's camera grid; read only
+%                                  refused only when its pixels cannot be
+%                                  placed on the DMD; read only
 %     snaps = reference_snaps()    the imaging camera's Snaps (file, name,
 %                                  modified), newest first
 %

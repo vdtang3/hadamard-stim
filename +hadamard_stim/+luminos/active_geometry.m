@@ -34,51 +34,78 @@ function [geometry, mismatch] = active_geometry(dmd, camera)
 %       (polynomial), the mask padded out to its sensor position, as
 %       Luminos does. No recalibration at the new area is needed.
 %
-%   Refuses (hadamard_stim:NoDmdCalibration) when no transform can be
-%   applied as recorded: the DMD holds no calibration for this camera, or
-%   the transform in use is not that calibration (the record would name a
-%   transform that was not used), or there is no reference image to say
-%   where the calibration was measured.
+%   The Kinetix's own calibration is made the DMD's active one first when
+%   it holds one and is using another camera's (use_kinetix_calibration).
+%   The calibration belongs to the camera and the light path, not to a field
+%   of view: any stage position, camera area or binning is drawn through
+%   it, and Luminos's calibration having been read from disk (status
+%   "file") is fine. Refuses (hadamard_stim:NoDmdCalibration) only when no
+%   usable transform exists for this camera: none stored for it (another
+%   camera's is never used), or its matrix is not finite or not invertible.
+%   The DMD tab's loaded reference image (dmd.refimage) is not needed: it
+%   is only the image the DMD tab shows, not a record of the calibration,
+%   and Luminos does not restore it at startup. When it is this camera's
+%   grid and the active transform is the calibration, setPatterningROI
+%   draws as before; otherwise the stored transform is applied directly.
 %
 %   mismatch (a warning, never a refusal) says when part of the camera's
-%   area lies outside the area the calibration was measured on: there the
-%   transform is extrapolated, and is only as good as its fit holds beyond
-%   the calibrated points. Empty otherwise.
+%   area lies outside the area the calibration was measured on (its stored
+%   roi): there the same transform is applied, extrapolated, and is only as
+%   good as its fit holds beyond the calibrated points. Empty otherwise.
+%
+%   geometry.to_dmd(xy) maps points in the camera grid ([n x 2] x, y, the
+%   cells' coordinates) to DMD mirror coordinates by the same transform;
+%   geometry.off_dmd(xy) says which land off the DMD canvas (their spots
+%   are clipped to the canvas, as imwarp clips any mask).
+selected = hadamard_stim.luminos.use_kinetix_calibration(dmd, camera);
 identity = dmd.calibration_identity(camera.name);
-problems = strings(0, 1);
 mismatch = struct("message", "", "consequence", "");
 if identity.status == "none" || ~identity.has_pair_calibration
-    problems(end+1) = sprintf("%s has no calibration for %s", dmd.name, camera.name);
-elseif ~identity.active_transform_is_pair_transform
-    problems(end+1) = sprintf(['the transform %s is using is not its %s calibration ' ...
-        '(select that camera''s calibration)'], dmd.name, camera.name);
+    error("hadamard_stim:NoDmdCalibration", ['The DMD cannot be used: %s has no calibration for %s ' ...
+        '(calibrate it in the DMD tab; a calibration stored under the camera''s former name ' ...
+        '"Kinetix" can be moved to it once with tools/migrate_dmd_calibration_camera).'], ...
+        dmd.name, camera.name);
 end
-if isempty(dmd.refimage)
-    problems(end+1) = sprintf("%s has no calibration reference image", dmd.name);
-end
-if ~isempty(problems)
-    error("hadamard_stim:NoDmdCalibration", ...
-        "The DMD cannot be used for this run: %s.", strjoin(problems, "; "));
+pair = identity.pair_transform;
+matrix = transform_matrix(pair);
+if ~isempty(matrix) && (~isequal(size(matrix), [3 3]) || any(~isfinite(matrix(:))) ...
+        || abs(det(matrix)) < 1e-12)
+    error("hadamard_stim:NoDmdCalibration", ['The DMD cannot be used: the %s calibration stored for ' ...
+        '%s is not a usable transform (its matrix is not finite or not invertible). Calibrate again.'], ...
+        dmd.name, camera.name);
 end
 
-[ref_bin, ref_roi] = dmd.reference_geometry();
-ref_bin = double(ref_bin);
-ref_roi = double(reshape(ref_roi, 1, []));
 [camera_roi, camera_bin] = hadamard_stim.luminos.camera_grid(camera);
 grid = [camera_roi(4) camera_roi(3)] / camera_bin;
-native = isequal(camera_bin, ref_bin) && isequal(camera_roi, ref_roi) ...
+ref_roi = [];
+ref_bin = NaN;
+if ~isempty(dmd.refimage)
+    [ref_bin, ref_roi] = dmd.reference_geometry();
+    ref_bin = double(ref_bin);
+    ref_roi = double(reshape(ref_roi, 1, []));
+end
+native = identity.active_transform_is_pair_transform && ~isempty(ref_roi) ...
+    && isequal(camera_bin, ref_bin) && isequal(camera_roi, ref_roi) ...
     && isequal(size(dmd.refimage.img), grid);
+% Where the calibration was measured: its own record, else (older entries)
+% the DMD tab's reference image.
+calibrated_roi = double(reshape(identity.roi, 1, []));
+if numel(calibrated_roi) ~= 4
+    calibrated_roi = ref_roi;
+end
 if native
     drawn_by = "setPatterningROI";
 else
     drawn_by = "calibration composed with the camera area's sensor origin";
-    inside = camera_roi(1) >= ref_roi(1) && camera_roi(2) >= ref_roi(2) ...
-        && camera_roi(1) + camera_roi(3) <= ref_roi(1) + ref_roi(3) ...
-        && camera_roi(2) + camera_roi(4) <= ref_roi(2) + ref_roi(4);
+end
+if numel(calibrated_roi) == 4
+    inside = camera_roi(1) >= calibrated_roi(1) && camera_roi(2) >= calibrated_roi(2) ...
+        && camera_roi(1) + camera_roi(3) <= calibrated_roi(1) + calibrated_roi(3) ...
+        && camera_roi(2) + camera_roi(4) <= calibrated_roi(2) + calibrated_roi(4);
     if ~inside
-        mismatch.message = sprintf(['%s acquires x %g, y %g, %g x %g (bin %g), which extends beyond ' ...
+        mismatch.message = sprintf(['%s area x %g, y %g, %g x %g (bin %g) extends beyond ' ...
             'the area the DMD calibration was measured on (x %g, y %g, %g x %g): there the ' ...
-            'calibration is extrapolated.'], camera.name, camera_roi, camera_bin, ref_roi);
+            'calibration is extrapolated.'], camera.name, camera_roi, camera_bin, calibrated_roi);
         mismatch.consequence = ['Spots outside the calibrated area land where the calibration''s ' ...
             'fit, extended, puts them; check them in the orange preview.'];
     end
@@ -87,6 +114,8 @@ end
 canvas = dmd.Pattern_Canvas_Size();
 geometry.scan_area = true(fliplr(canvas));
 geometry.rasterize = @rasterize;
+geometry.to_dmd = @to_dmd;
+geometry.off_dmd = @off_dmd;
 geometry.identity = struct("source", "luminos_dmd_calibration", ...
     "device", string(dmd.name), "camera", string(camera.name), ...
     "status", string(identity.status), "measured_utc", identity.measured_utc, ...
@@ -95,7 +124,9 @@ geometry.identity = struct("source", "luminos_dmd_calibration", ...
     "transform_class", string(class(identity.pair_transform)), ...
     "camera_grid", grid, "canvas", canvas, ...
     "camera_roi", camera_roi, "camera_bin", camera_bin, ...
-    "drawn_by", drawn_by, "extrapolated", strlength(mismatch.message) > 0);
+    "calibrated_roi", calibrated_roi, ...
+    "drawn_by", drawn_by, "extrapolated", strlength(mismatch.message) > 0, ...
+    "selected_by_hadamard_stim", selected);
 
     function mask = rasterize(spots, kind)
         if ~ismember(kind, ["auto_square" "hidden"])
@@ -109,7 +140,7 @@ geometry.identity = struct("source", "luminos_dmd_calibration", ...
         if native
             warped = dmd.setPatterningROI(camera_mask, "write_when_complete", false);
         else
-            warped = warp_from_area(camera_mask, identity.pair_transform, camera_roi, canvas);
+            warped = warp_from_area(camera_mask, pair, camera_roi, canvas);
         end
         mask = logical(warped > 0.5);
         if ~isequal(size(mask), canvas)
@@ -117,6 +148,20 @@ geometry.identity = struct("source", "luminos_dmd_calibration", ...
                 "%s returned a %d x %d mask; the canvas is %d x %d.", dmd.name, ...
                 size(mask, 1), size(mask, 2), canvas(1), canvas(2));
         end
+    end
+
+    function uv = to_dmd(xy)
+        % Camera-grid points -> unbinned sensor pixels (the warp's own
+        % convention: imresize to sensor pixels, then the area's origin)
+        % -> DMD mirrors, by the stored transform.
+        sensor = (double(xy) - 0.5) * camera_bin + 0.5 + camera_roi(1:2);
+        uv = transformPointsForward(as_transform(pair), sensor);
+    end
+
+    function out = off_dmd(xy)
+        uv = to_dmd(xy);
+        out = ~all(isfinite(uv), 2) | uv(:, 1) < 0.5 | uv(:, 2) < 0.5 ...
+            | uv(:, 1) > canvas(2) + 0.5 | uv(:, 2) > canvas(1) + 0.5;
     end
 end
 
@@ -135,6 +180,14 @@ if isempty(composed)
     composed = transform;
 end
 warped = imwarp(upsampled, composed, "OutputView", imref2d(canvas));
+end
+
+function t = as_transform(transform)
+% A struct holding only A (what tests and old entries may carry) as a transform.
+t = transform;
+if isstruct(transform) && isfield(transform, "A")
+    t = projtform2d(double(transform.A));
+end
 end
 
 function local = compose_origin_shift(transform, origin)

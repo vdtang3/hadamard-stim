@@ -265,10 +265,11 @@ classdef HadamardStimController < handle
 
         function loadReferenceSnap(obj, file)
             % A Luminos Snap (the Snap button's or the HiLo tab's .mat) as
-            % the reference image, instead of a Hadamard scan. Refused
-            % unless it is in the camera's acquisition grid now - any area,
-            % not only the DMD calibration's (luminos.check_reference_snap);
-            % the image is used exactly as
+            % the reference image, instead of a Hadamard scan. Its cells are
+            % drawn from the Snap's own camera area and binning, through the
+            % camera's stored DMD calibration (luminos.check_reference_snap:
+            % a camera area other than the camera's now is a notice, not a
+            % refusal); the image is used exactly as
             % saved. Read only: the rig need not be prepared (so neither
             % the Hadamard calibration scans nor the blue calibration are
             % needed) and no device is begun or claimed. Segmentation,
@@ -278,6 +279,9 @@ classdef HadamardStimController < handle
             obj.requireBackend();
             [im, source] = obj.Backend.load_reference_snap(string(file));
             obj.adoptReferenceImage(im, source);
+            if isfield(source, "fit") && isfield(source.fit, "warnings") && ~isempty(source.fit.warnings)
+                obj.SetupNotice = strjoin(source.fit.warnings, " ");
+            end
         end
 
         function proposeCells(obj)
@@ -996,7 +1000,8 @@ classdef HadamardStimController < handle
             if ~isempty(obj.Cells)
                 drawn = obj.CellsGeometry;
             end
-            if (~isempty(obj.Proposal) || ~isempty(obj.Cells)) && ~isequaln(drawn, geometry)
+            if (~isempty(obj.Proposal) || ~isempty(obj.Cells)) ...
+                    && ~isequaln(calibration_of(drawn), calibration_of(geometry))
                 obj.discardCells("The rig was prepared with another DMD calibration than the " + ...
                     "cells were drawn with, so their masks would land elsewhere: the cells were " + ...
                     "discarded. The reference image is kept: Segment again.");
@@ -1045,16 +1050,36 @@ classdef HadamardStimController < handle
         function segmentBody(obj)
             % The prepared rig's geometry; before preparing, the backend
             % reads the same active DMD calibration.
-            if obj.hasEnvironment()
+            % A Snap is drawn from its own camera area, which need not be the
+            % camera's now.
+            if obj.ReferenceSource.kind == "snap" && ~isempty(obj.Backend)
+                snap = obj.ReferenceSource.snap;
+                geometry = obj.Backend.geometry(struct("roi", snap.roi, "bin", snap.bin));
+            elseif obj.hasEnvironment()
                 geometry = obj.Env.geometry;
             else
                 geometry = obj.Backend.geometry();
             end
+            notice = obj.SetupNotice;
             obj.Proposal = hadamard_stim.protocol.segment_cells(obj.Config, ...
                 obj.ReferenceImage, geometry);
             obj.ProposalGeometry = geometry.identity;
             obj.LifecycleState = "CELLS_PROPOSED";
-            obj.SetupNotice = "";
+            % Kept: the Snap's notice. Said: extrapolation, cells off the DMD.
+            notices = strings(0, 1);
+            if obj.ReferenceSource.kind == "snap" && strlength(notice) > 0
+                notices(end+1) = notice;
+            end
+            if isfield(geometry.identity, "extrapolated") && geometry.identity.extrapolated
+                notices(end+1) = "Part of the image lies beyond the area the DMD calibration was " + ...
+                    "measured on: its cells are placed by the same calibration, extrapolated; check " + ...
+                    "them in the orange preview.";
+            end
+            if isfield(obj.Proposal, "off_dmd") && ~isempty(obj.Proposal.off_dmd)
+                notices(end+1) = sprintf("Cells %s map off the DMD: their spots are clipped to the DMD's edge or absent.", ...
+                    strjoin(string(obj.Proposal.off_dmd), ", "));
+            end
+            obj.SetupNotice = strjoin(notices, " ");
         end
 
         function zReferenceBody(obj)
@@ -1303,6 +1328,9 @@ classdef HadamardStimController < handle
         function requireDrawnGeometry(obj)
             % The cells' masks were drawn with CellsGeometry; showing them
             % under another DMD calibration would put the light elsewhere.
+            % Only the calibration counts: the camera's area or binning now,
+            % or the DMD's selection having been made by Hadamard Stim, do
+            % not move a mask already drawn on the DMD.
             if isempty(obj.CellsGeometry)
                 return   % cells from a checkpoint, drawn with the run's geometry
             end
@@ -1311,7 +1339,7 @@ classdef HadamardStimController < handle
             else
                 now_ = obj.Backend.geometry().identity;
             end
-            if ~isequaln(now_, obj.CellsGeometry)
+            if ~isequaln(calibration_of(now_), calibration_of(obj.CellsGeometry))
                 error("hadamard_stim:GeometryChanged", ...
                     ['The active DMD calibration is not the one these cells were drawn with, so their ' ...
                      'mask would not land on them. Segment and approve again (the reference image is kept).']);
@@ -1673,6 +1701,17 @@ if isfield(env, "context") && isfield(env.context, "hardware") ...
         && isfield(env.context.hardware, "scan_calibration") ...
         && isfield(env.context.hardware.scan_calibration, "scorr_sha256")
     sha = string(env.context.hardware.scan_calibration.scorr_sha256);
+end
+end
+
+function c = calibration_of(identity)
+% What identifies a DMD calibration in a geometry identity: the device, the
+% transform and when it was measured - not the camera area it was drawn in.
+c = struct();
+for name = ["source" "device" "transform" "transform_class" "measured_utc"]
+    if isstruct(identity) && isfield(identity, name)
+        c.(name) = identity.(name);
+    end
 end
 end
 

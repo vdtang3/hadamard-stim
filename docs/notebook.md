@@ -1485,6 +1485,136 @@ and approves a binned Snap at a new area. Not yet checked on the rig: compare
 the orange preview of one cell drawn from a slide Snap and from a Snap of a
 sub-area.
 
+## 2026-11-05: Kinetix only (the Libra setting removed)
+
+Firefly is back on the Teledyne Kinetix, and Hadamard Stim supports no other
+imaging camera. Removed: `firefly_profile(camera_name)` and the
+`LuminosBackend` `camera_name` option (the Luminos Hadamard_Stim device's
+`camera_name`, which on vdtang3/libra-firefly named "Libra 5514 Pro" - why the
+tab was still using the Libra), the Kinetix-only exception in `camera_format`
+(unlisted 16-bit modes take Yitong's 100 again, as before 2026-11-04), and the
+Libra tests. Kept, as generic: the Snap's `um_per_px`, and Snaps at any camera
+area (2026-11-05 entry above).
+
+The Kinetix is found by what it is - Luminos's one camera of type 3 (PVCAM;
+`find_camera_by_type`) - not by its display name, so the rename between
+"Kinetix" and "Teledyne Kinetix" does not matter, and the Grasshopper3 and
+Blackfly (GenTL, type 4) are never taken in its place. No Kinetix, or two, is a
+clear refusal. The acquisition plan, Snap listing, Snap check, blue calibration
+and diagnostics use the camera so found.
+
+DMD calibration: Luminos keeps one per camera name and makes the most recently
+used one active at startup, which on Firefly was the Libra's.
+`use_kinetix_calibration` selects the Kinetix's stored calibration
+(`use_calibration_camera`) when another camera's is active; with none stored
+for the Kinetix it refuses and never uses another camera's. Firefly's Kinetix
+calibration is stored under the camera's former name "Kinetix";
+`tools/migrate_dmd_calibration_camera` copies it to "Teledyne Kinetix" once
+(backup of the config file first; the old entry, the Libra's and the saved
+library untouched; refuses a mismatched, identity or conflicting entry).
+
+Timing: unlike HiLo before Luminos 451d52fb7 (0.2 us between exposure end and
+the next edge; the Kinetix took every other edge), his exposures leave 16 us
+(1.25 ms in 1.27 ms; 2.5 in 2.52), the same as a regular Firefly acquisition
+that takes every edge. No change.
+
+## 2026-11-06: manual HiLo, segmentation and mask tools
+
+A script route around the HiLo and Hadamard Stim tabs, for Firefly while the
+integrated HiLo is not trusted: the operator shows U and S on the orange DMD
+and takes two ordinary Snaps; the rest is offline. Four root functions
+(`manual_hilo_patterns`, `manual_hilo_display`, `manual_hilo_reconstruct`,
+`manual_segment_dmd`), with an image reader in `+manual`. No camera,
+DAQ or trigger API is named in them (a test checks the source).
+
+Reuse, not copies: patterns are Luminos's `generate_hilo_pattern` (and
+`hilo_fov_mask` when a camera is given); the reconstruction is Luminos's
+`reconstruct_hilo`, called as `run_hilo_acquisition` calls it for one plane
+except `n_averaged = 1` (each image is one snapshot); segmentation is
+`segment_cells`/`draw_cells`, the DMD drawing `active_geometry`, the checks
+`check_reference_snap`, the file `write_orange_mask`. So Hadamard Stim reads
+the reconstruction as a Snap (its `.mat` has a `snap` with the snapshots'
+camera, area, binning, DMD transforms and scale) and the manual mask file is
+the tab's export. `camera_grid` now also takes a struct (name, roi, bin): an
+image's recorded area, which `active_geometry` composes with the
+calibration as it does the camera's.
+
+Single U/S pair: `reconstruct_hilo` needs nothing more than one U and one S;
+what the burst average bought is noise, accounted for by `n_averaged`. The
+tab's automatic structured-power calibration and its frame-map checks have no
+counterpart - the operator sets the orange level.
+
+A manual mask needs the image's camera area; without one it is refused for
+the DMD rather than guessed (segmentation alone still works). The image must
+be the Kinetix's (by recorded name, the only identity a file carries); the
+Libra's calibration is never used.
+
+(Superseded the same day: segmentation settings and refusals, see the next entry.)
+
+Tested (`TestManualHilo`): patterns equal the generator's at the same seed,
+substream and block, on the canvas [rows columns], and with a camera equal
+the tab's U and first-plane S; the reconstruction equals `reconstruct_hilo`
+exactly from Snap `.mat`s, Snap `.tiff`s and arrays; the `.mat` and `.tif`
+keep camera, area, binning, scale and transforms; the tab lists and loads it
+and its cells and mask equal `manual_segment_dmd`'s, file included; a
+cropped, binned image's cell lands where the calibration puts its sensor
+position; a Libra image is refused. Not yet on the rig: one U/S pair on
+Firefly, then the orange mask of a few cells checked on the live image.
+
+## 2026-11-06: the DMD calibration at any field of view; tunable manual segmentation
+
+Audit of every refusal between a reference image and a projected mask. The
+calibration maps unbinned sensor pixels to mirrors and belongs to the camera
+and light path, so only what makes targeting undefined still refuses:
+
+- **Still refused:** no calibration stored for the Kinetix (another camera's,
+  e.g. the Libra's, is never used); a stored matrix that is not finite or not
+  invertible (new); a Snap from another camera; an image that is not one frame
+  of its recorded area, or records no binning (its pixels cannot be placed on
+  the sensor); manual images without a camera area; a pattern that is not the
+  DMD canvas; a DMD owned by another tool.
+- **Was refused, now allowed:**
+  - `dmd.refimage` empty. It is only the image the DMD tab has loaded, not a
+    record of the calibration, and Luminos does not restore it at startup, so
+    after every restart Hadamard Stim refused until an image was loaded there.
+    The stored transform is now applied directly; setPatterningROI still draws
+    when the area is the loaded image's.
+  - The active transform not being the pair calibration (after the selection
+    attempt): the stored pair transform is applied directly.
+  - A Snap whose camera area or binning differs from the camera's now. Its
+    cells are drawn from the Snap's own area (`LuminosBackend.geometry(area)`),
+    with a notice that the run's images are in another grid.
+  - A Snap that recorded another transform for the DMD: whatever was active
+    when it was taken (at startup Luminos reactivates the last calibration
+    used, the Libra's on Firefly; or before a recalibration). Now a notice;
+    the stored calibration is used.
+  - "Kinetix" vs "Teledyne Kinetix": one camera.
+- **Fixed:** the orange preview and Prepare compared whole geometry records,
+  camera area and `selected_by_hadamard_stim` included. A camera area changed
+  after approval stopped the preview ("not the calibration these cells were
+  drawn with") and Prepare discarded the cells. They now compare the
+  calibration (device, transform, measured time). The selection flag could
+  have done the same; in the flows tested an earlier check always made the
+  selection first.
+- **Extrapolation:** judged against the calibration's own recorded ROI (the
+  DMD tab image's only for entries without one); a warning in readiness and a
+  setup notice, never a refusal. `geometry.to_dmd`/`off_dmd` map cells by the
+  same transform; `draw_cells` lists cells off the canvas (`off_dmd`), whose
+  spots imwarp clips, as any mask; the tab says so after segmentation.
+
+Coordinates: image pixel → `(xy - 0.5) * bin + 0.5 + origin` (unbinned
+sensor) → stored transform, the same mapping as the drawing (imresize to
+sensor pixels, composed origin shift). Tested for crops, binning 2 and areas
+beyond the calibrated crop (`TestCalibrationAnyFov`).
+
+Manual segmentation now takes the tab's settings struct itself
+(`segmentation_settings`: the same fields, defaults and checks; n_exclude
+required, as in the tab), segments without a DMD (`+manual/segment`), and
+draws masks only for accepted cells. `review=true` opens a tuner
+(`segmentation_tuner`). Settings are saved with each result and as .json.
+The tab has no camera-offset, diameter, background, maximum-area or dilation
+setting, so neither has the tool. Tested in `TestManualSegmentation`.
+
 ## Parity issues (behaviour that may be a bug; reproduced, not fixed)
 
 - **P1. Reference-image orientation changed after the experiments.** `hadamard_ref.m` gained a transpose on 2026-02-10, after his 2025 data, alongside a Kinetix MEX change. In the newest snapshot, segmentation would run on the transposed image while drift correction compares untransposed scans with the untransposed `hadamard_ref`. The fixtures follow his 2025-03-08 session, which is the untransposed behaviour he actually ran. In Luminos the reference image, scans and DMD calibration must all share Luminos's camera orientation. **Confirmed 2026-10-13: the port follows the untransposed 2025 behaviour.** The transposed `hadamard_ref.m` stays frozen only as evidence.

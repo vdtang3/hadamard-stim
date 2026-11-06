@@ -23,9 +23,11 @@ classdef FakeAlpDmd < hadamard_stim.testing.FakeLuminosDevice
         % Luminos calibration state for one camera (calibration_identity).
         CalibratedCamera = "Teledyne Kinetix"
         ActiveIsPair = true
+        SelectedCamera = ""            % the last use_calibration_camera
         refimage = struct("img", zeros(328, 448), "bin", 1)
         ReferenceRoi = [0 0 448 328]   % reference_geometry: [x0 y0 width height]
         MeasuredUtc = 0                % when calibrated; 0 is "not recorded"
+        CalibrationStatus = "session"  % "file" once read back from disk (a restart)
         PairTransform = struct("A", eye(3))   % the calibration's camera->DMD transform
         % What the adapter loaded, as SimulatedRig records it.
         Stack = struct("sha256", "", "size", [0 0 0])
@@ -162,12 +164,25 @@ classdef FakeAlpDmd < hadamard_stim.testing.FakeLuminosDevice
             calibrated = string(camera) == obj.CalibratedCamera;
             status = "none";
             if calibrated
-                status = "session";
+                status = obj.CalibrationStatus;
             end
             identity = struct("status", status, "has_pair_calibration", calibrated, ...
                 "active_transform_is_pair_transform", calibrated && obj.ActiveIsPair, ...
                 "pair_transform", obj.PairTransform, "measured_utc", obj.MeasuredUtc, "bin", 1, ...
                 "roi", obj.ReferenceRoi, "mode", "fake");
+        end
+
+        function status = use_calibration_camera(obj, camera)
+            % Patterning_Device: load that camera's stored calibration into
+            % the active transform; with none, the active one is left alone.
+            obj.check("use_calibration_camera");
+            obj.SelectedCamera = string(camera);
+            if string(camera) == obj.CalibratedCamera
+                obj.ActiveIsPair = true;
+                status = "file";
+            else
+                status = "none";
+            end
         end
 
         function [bin, roi] = reference_geometry(obj)
